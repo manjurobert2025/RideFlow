@@ -9,45 +9,65 @@ import {
   TextInput,
   View,
 } from "react-native";
+
+import { loginUser } from "../../../services/authService";
+
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+
   const login = async () => {
-  try {
-    const response = await fetch("https://localhost:7197/api/Auth/login", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        email,
-        password,
-      }),
-    });
+    // Validate email
+    if (!email.trim()) {
+      alert("Please enter your email.");
+      return;
+    }
 
-    const data = await response.json();
+    // Validate password
+    if (!password.trim()) {
+      alert("Please enter your password.");
+      return;
+    }
 
-if (!response.ok) {
-    alert(data.message);
-    return;
-}
+    try {
+      console.log("Attempting rider login...");
 
-// Save the JWT
-await AsyncStorage.setItem("token", data.token);
+      const response = await loginUser({
+        email: email.trim(),
+        password: password,
+      });
 
-// Go to Book Ride page
-router.replace("/bookride");
-  } catch (error) {
-    console.error(error);
-    alert("Login Failed");
-  }
-};
+      const data = response.data;
+
+      console.log("Rider login response:", data);
+
+      // Save JWT token
+      await AsyncStorage.setItem("token", data.token);
+
+      // Navigate to Book Ride screen
+      router.replace("/bookride");
+    } catch (error: any) {
+      console.log("Rider login error:", error);
+
+      if (error.response) {
+        console.log("Status:", error.response.status);
+        console.log("Data:", error.response.data);
+      }
+
+      alert(
+        error.response?.data?.message ||
+          error.response?.data ||
+          "Login Failed"
+      );
+    }
+  };
+
   return (
     <ScrollView
-  contentContainerStyle={styles.container}
-  showsVerticalScrollIndicator={false}
->
+      contentContainerStyle={styles.container}
+      showsVerticalScrollIndicator={false}
+    >
       {/* Logo */}
       <Text style={styles.logo}>🚖</Text>
 
@@ -71,6 +91,7 @@ router.replace("/bookride");
         placeholder="Enter your email"
         keyboardType="email-address"
         autoCapitalize="none"
+        autoCorrect={false}
         value={email}
         onChangeText={setEmail}
       />
@@ -86,31 +107,42 @@ router.replace("/bookride");
         onChangeText={setPassword}
       />
 
-      {/* Show Password */}
+      {/* Show / Hide Password */}
       <Pressable
         onPress={() => setShowPassword(!showPassword)}
       >
         <Text style={styles.showPassword}>
-          {showPassword ? "Hide Password" : "Show Password"}
+          {showPassword
+            ? "Hide Password"
+            : "Show Password"}
         </Text>
       </Pressable>
 
       {/* Forgot Password */}
-      <Pressable>
+      <Pressable
+        onPress={() =>
+          router.push("/auth/forgot-password")
+        }
+      >
         <Text style={styles.forgotPassword}>
           Forgot Password?
         </Text>
       </Pressable>
 
       {/* Login Button */}
-      <Pressable style={styles.button} onPress={login}>
-  <Text style={styles.buttonText}>
-    LOGIN
-  </Text>
-</Pressable>
+      <Pressable
+        style={styles.button}
+        onPress={login}
+      >
+        <Text style={styles.buttonText}>
+          LOGIN
+        </Text>
+      </Pressable>
 
       {/* Divider */}
-      <Text style={styles.orText}>──────── OR ────────</Text>
+      <Text style={styles.orText}>
+        ──────── OR ────────
+      </Text>
 
       {/* Google Login */}
       <Pressable style={styles.googleButton}>
@@ -121,13 +153,17 @@ router.replace("/bookride");
 
       {/* Register */}
       <View style={styles.footer}>
-        <Text>Don't have an account? </Text>
+        <Text>
+          Don't have an account?{" "}
+        </Text>
 
         <Link href="/auth/register" asChild>
-  <Pressable>
-    <Text style={styles.register}>Register</Text>
-  </Pressable>
-</Link>
+          <Pressable>
+            <Text style={styles.register}>
+              Register
+            </Text>
+          </Pressable>
+        </Link>
       </View>
     </ScrollView>
   );
@@ -135,10 +171,11 @@ router.replace("/bookride");
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
+    flexGrow: 1,
     backgroundColor: "#fff",
     justifyContent: "center",
     paddingHorizontal: 25,
+    paddingVertical: 30,
   },
 
   logo: {

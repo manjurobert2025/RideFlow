@@ -19,7 +19,7 @@ if (password !== confirmPassword) {
     return;
   }
   try {
-    const response = await fetch("https://localhost:7197/api/Auth/register", {
+    const response = await fetch("http://192.168.1.5:5150/api/Auth/register", {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
