@@ -1,11 +1,15 @@
+import { router } from "expo-router";
 import { useState } from "react";
 import {
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  View,
+  View
 } from "react-native";
+import { registerUser } from "../../../services/authService";
+
 export default function RegisterScreen() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -14,42 +18,36 @@ export default function RegisterScreen() {
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const register = async () => {
-if (password !== confirmPassword) {
+  if (password !== confirmPassword) {
     alert("Passwords do not match");
     return;
   }
+
   try {
-    const response = await fetch("http://192.168.1.5:5150/api/Auth/register", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-  },
-   body: JSON.stringify({
-    name: fullName,
-    email: email,
-    phoneNumber: phoneNumber,
-    password: password,
-    role: "Rider",
-  }),
-});
-console.log("Status:", response.status);
+    const response = await registerUser({
+      name: fullName,
+      email: email,
+      phoneNumber: phoneNumber,
+      password: password,
+      role: "Rider",
+    });
 
-  const text = await response.text();
-  console.log("Response:", text);
+    console.log("Registration response:", response.data);
+    alert("Registration successful");   
+    router.replace("/auth/login");
+  } catch (error: any) {
+    console.log("Registration error:", error);
+    console.log("Response:", error.response?.data);
 
-  if (response.ok) {
-    alert("Registration successful");
-  } else {
-    alert(text);
+    alert(
+      error.response?.data?.message ||
+      error.response?.data ||
+      "Registration failed"
+    );
   }
-} catch (error) {
-  console.error(error);
-  alert("Fetch failed. Check the browser console (F12).");
-}
-  };
-
+};
   return (
-    <View style={styles.container}>
+    <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.logo}>🚖</Text>
 
       <Text style={styles.title}>Create Account</Text>
@@ -108,13 +106,13 @@ console.log("Status:", response.status);
       </Pressable>
 
       <View style={styles.footer}>
-        <Text>Already have an account? </Text>
+  <Text>Already have an account? </Text>
 
-        <Pressable>
-          <Text style={styles.login}>Login</Text>
-        </Pressable>
-      </View>
-    </View>
+  <Pressable onPress={() => router.push("/auth/login")}>
+    <Text style={styles.login}>Login</Text>
+  </Pressable>
+</View>
+    </ScrollView>
   );
 }
 
