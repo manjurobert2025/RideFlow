@@ -18,7 +18,12 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.manjurobert.UberRider"
+      "package": "com.manjurobert.UberRider",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyCqoGDAHLfOMyvKo9sjOAUB72GEzh9B3bM"
+        }
+      }
     },
     "web": {
       "output": "static",
@@ -27,13 +32,27 @@
     "plugins": [
       "expo-router",
       [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow UberRider to use your location to find your pickup point."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#208AEF",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
-      ]
+      ],
+      [
+  "expo-build-properties",
+  {
+    "android": {
+      "usesCleartextTraffic": true
+    }
+  }
+]
     ],
     "experiments": {
       "typedRoutes": true,
