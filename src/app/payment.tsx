@@ -78,7 +78,7 @@ export default function Payment() {
 
     // 3. Verify payment with backend
     const verifyResponse = await fetch(
-      "YOUR_API_BASE_URL/api/Payment/verify",
+      "`${api}/api/Payment/verify",
       {
         method: "POST",
         headers: {
