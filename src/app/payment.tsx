@@ -9,6 +9,7 @@ import {
   View,
 } from "react-native";
 import RazorpayCheckout from "react-native-razorpay";
+import api from "../../services/api";
 export default function Payment() {
   const router = useRouter();
 
@@ -32,18 +33,17 @@ export default function Payment() {
 
     // 1. Create Razorpay order
     const response = await fetch(
-      "YOUR_API_BASE_URL/api/Payment/create-order",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          rideId: rideId,
-        }),
-      }
-    );
-
+  `${api}/api/Payment/create-order`,
+  {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      rideId: rideId,
+    }),
+  }
+);
     const data = await response.json();
 
     if (!response.ok) {
