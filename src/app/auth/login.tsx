@@ -1,9 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Link, router } from "expo-router";
+import { router } from "expo-router";
 import { useState } from "react";
 import {
+  ActivityIndicator,
+  Alert,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -15,266 +16,290 @@ import { loginUser } from "../../../services/authService";
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const login = async () => {
-    // Validate email
+  const handleLogin = async () => {
     if (!email.trim()) {
-      alert("Please enter your email.");
+      Alert.alert(
+        "Validation",
+        "Please enter your email address."
+      );
       return;
     }
 
-    // Validate password
-    if (!password.trim()) {
-      alert("Please enter your password.");
+    if (!password) {
+      Alert.alert(
+        "Validation",
+        "Please enter your password."
+      );
       return;
     }
 
     try {
-      console.log("Attempting rider login...");
+      setLoading(true);
 
-      const response = await loginUser({
-        email: email.trim(),
-        password: password,
-      });
+      console.log(
+        "Logging in rider:",
+        email.trim()
+      );
 
-      const data = response.data;
+      const user = await loginUser(
+        email.trim(),
+        password
+      );
 
-      console.log("Rider login response:", data);
+      console.log(
+        "✅ Firebase login successful:",
+        user.uid
+      );
 
-      // Save JWT token
-      await AsyncStorage.setItem("token", data.token);
+      await AsyncStorage.setItem(
+        "firebaseUid",
+        user.uid
+      );
 
-      // Navigate to Book Ride screen
-      router.replace("/bookride");
-    } catch (error: any) {
-      console.log("Rider login error:", error);
-
-      if (error.response) {
-        console.log("Status:", error.response.status);
-        console.log("Data:", error.response.data);
+      if (user.email) {
+        await AsyncStorage.setItem(
+          "email",
+          user.email
+        );
       }
 
-      alert(
-        error.response?.data?.message ||
-          error.response?.data ||
-          "Login Failed"
+      // Remove old JWT if one exists
+      await AsyncStorage.removeItem(
+        "token"
       );
+
+      router.replace("/bookride");
+    } catch (error: any) {
+      console.error(
+        "Login error:",
+        error
+      );
+
+      let message =
+        "Unable to login. Please try again.";
+
+      switch (error?.code) {
+        case "auth/invalid-email":
+          message =
+            "Please enter a valid email address.";
+          break;
+
+        case "auth/invalid-credential":
+          message =
+            "Invalid email or password.";
+          break;
+
+        case "auth/user-not-found":
+          message =
+            "No account found with this email address.";
+          break;
+
+        case "auth/wrong-password":
+          message =
+            "Incorrect password.";
+          break;
+
+        case "auth/user-disabled":
+          message =
+            "This account has been disabled.";
+          break;
+
+        case "auth/network-request-failed":
+          message =
+            "Network error. Please check your internet connection.";
+          break;
+      }
+
+      Alert.alert(
+        "Login Failed",
+        message
+      );
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <ScrollView
-      contentContainerStyle={styles.container}
-      showsVerticalScrollIndicator={false}
-    >
-      {/* Logo */}
-      <Text style={styles.logo}>🚖</Text>
-
-      {/* Title */}
-      <Text style={styles.title}>Uber Clone</Text>
-
-      {/* Subtitle */}
-      <Text style={styles.subtitle}>
-        Welcome Back
-      </Text>
-
-      <Text style={styles.description}>
-        Sign in to continue booking your rides.
-      </Text>
-
-      {/* Email */}
-      <Text style={styles.label}>Email</Text>
-
-      <TextInput
-        style={styles.input}
-        placeholder="Enter your email"
-        keyboardType="email-address"
-        autoCapitalize="none"
-        autoCorrect={false}
-        value={email}
-        onChangeText={setEmail}
-      />
-
-      {/* Password */}
-      <Text style={styles.label}>Password</Text>
-
-      <TextInput
-        style={styles.input}
-        placeholder="Enter your password"
-        secureTextEntry={!showPassword}
-        value={password}
-        onChangeText={setPassword}
-      />
-
-      {/* Show / Hide Password */}
-      <Pressable
-        onPress={() => setShowPassword(!showPassword)}
-      >
-        <Text style={styles.showPassword}>
-          {showPassword
-            ? "Hide Password"
-            : "Show Password"}
-        </Text>
-      </Pressable>
-
-      {/* Forgot Password */}
-      <Pressable
-        onPress={() =>
-          router.push("/auth/forgot-password")
-        }
-      >
-        <Text style={styles.forgotPassword}>
-          Forgot Password?
-        </Text>
-      </Pressable>
-
-      {/* Login Button */}
-      <Pressable
-        style={styles.button}
-        onPress={login}
-      >
-        <Text style={styles.buttonText}>
-          LOGIN
-        </Text>
-      </Pressable>
-
-      {/* Divider */}
-      <Text style={styles.orText}>
-        ──────── OR ────────
-      </Text>
-
-      {/* Google Login */}
-      <Pressable style={styles.googleButton}>
-        <Text style={styles.googleText}>
-          Continue with Google
-        </Text>
-      </Pressable>
-
-      {/* Register */}
-      <View style={styles.footer}>
-        <Text>
-          Don't have an account?{" "}
+    <View style={styles.container}>
+      <View style={styles.card}>
+        <Text style={styles.icon}>
+          🚖
         </Text>
 
-        <Link href="/auth/register" asChild>
-          <Pressable>
-            <Text style={styles.register}>
+        <Text style={styles.title}>
+          Rider Login
+        </Text>
+
+        <Text style={styles.subtitle}>
+          Login to book your ride
+        </Text>
+
+        <TextInput
+          style={styles.input}
+          placeholder="Email"
+          value={email}
+          onChangeText={setEmail}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+
+        <TextInput
+          style={styles.input}
+          placeholder="Password"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+          autoCapitalize="none"
+        />
+
+        <Pressable
+          onPress={() =>
+            router.push(
+              "/auth/forgot-password"
+            )
+          }
+        >
+          <Text style={styles.forgotText}>
+            Forgot Password?
+          </Text>
+        </Pressable>
+
+        <Pressable
+          style={[
+            styles.button,
+            loading &&
+              styles.disabledButton,
+          ]}
+          onPress={handleLogin}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator
+              color="#ffffff"
+            />
+          ) : (
+            <Text
+              style={styles.buttonText}
+            >
+              LOGIN
+            </Text>
+          )}
+        </Pressable>
+
+        <View style={styles.registerRow}>
+          <Text style={styles.registerText}>
+            Don't have an account?
+          </Text>
+
+          <Pressable
+            onPress={() =>
+              router.push(
+                "/auth/register"
+              )
+            }
+          >
+            <Text
+              style={styles.registerLink}
+            >
               Register
             </Text>
           </Pressable>
-        </Link>
+        </View>
       </View>
-    </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flexGrow: 1,
-    backgroundColor: "#fff",
+    flex: 1,
     justifyContent: "center",
-    paddingHorizontal: 25,
-    paddingVertical: 30,
+    alignItems: "center",
+    backgroundColor: "#f4f5f7",
+    padding: 20,
   },
 
-  logo: {
-    fontSize: 60,
+  card: {
+    width: "100%",
+    maxWidth: 380,
+    backgroundColor: "#ffffff",
+    borderRadius: 20,
+    padding: 25,
+  },
+
+  icon: {
+    fontSize: 50,
     textAlign: "center",
     marginBottom: 10,
   },
 
   title: {
-    fontSize: 32,
+    fontSize: 26,
     fontWeight: "bold",
     textAlign: "center",
+    marginBottom: 5,
   },
 
   subtitle: {
-    fontSize: 24,
-    fontWeight: "600",
-    marginTop: 20,
+    fontSize: 14,
+    color: "#6B7280",
     textAlign: "center",
-  },
-
-  description: {
-    textAlign: "center",
-    color: "gray",
-    marginTop: 10,
-    marginBottom: 30,
-    fontSize: 16,
-  },
-
-  label: {
-    fontSize: 16,
-    fontWeight: "600",
-    marginBottom: 8,
-    marginTop: 10,
-  },
-
-  input: {
-    borderWidth: 1,
-    borderColor: "#d9d9d9",
-    borderRadius: 12,
-    padding: 14,
-    fontSize: 16,
-    backgroundColor: "#fafafa",
-  },
-
-  showPassword: {
-    color: "#000",
-    textAlign: "right",
-    marginTop: 10,
-    fontWeight: "600",
-  },
-
-  forgotPassword: {
-    color: "#555",
-    textAlign: "right",
-    marginTop: 20,
     marginBottom: 25,
   },
 
+  input: {
+    width: "100%",
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    borderRadius: 10,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    fontSize: 16,
+    backgroundColor: "#ffffff",
+    marginBottom: 15,
+  },
+
+  forgotText: {
+    textAlign: "right",
+    color: "#0066ff",
+    fontWeight: "600",
+    marginBottom: 20,
+  },
+
   button: {
-    backgroundColor: "#000",
-    padding: 16,
-    borderRadius: 12,
+    backgroundColor: "#000000",
+    paddingVertical: 15,
+    borderRadius: 10,
     alignItems: "center",
+    width: "100%",
+  },
+
+  disabledButton: {
+    opacity: 0.6,
   },
 
   buttonText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 18,
-  },
-
-  orText: {
-    textAlign: "center",
-    marginVertical: 25,
-    color: "gray",
-  },
-
-  googleButton: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    padding: 15,
-    borderRadius: 12,
-    alignItems: "center",
-  },
-
-  googleText: {
+    color: "#ffffff",
     fontSize: 16,
-    fontWeight: "600",
+    fontWeight: "bold",
   },
 
-  footer: {
+  registerRow: {
     flexDirection: "row",
     justifyContent: "center",
-    marginTop: 35,
+    marginTop: 20,
+    gap: 5,
   },
 
-  register: {
-    color: "#000",
+  registerText: {
+    color: "#666666",
+  },
+
+  registerLink: {
+    color: "#0066ff",
     fontWeight: "bold",
   },
 });

@@ -1,782 +1,2482 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
+
 import { router } from "expo-router";
+
+import {
+  addDoc,
+  collection,
+  doc,
+  getDocs,
+  onSnapshot,
+  query,
+  serverTimestamp,
+  where,
+} from "firebase/firestore";
+
 import { useEffect, useRef, useState } from "react";
+
 import {
   ActivityIndicator,
+
   Alert,
-  Pressable,
+
   StyleSheet,
+
   Text,
+
   TextInput,
+
+  TouchableOpacity,
+
   View,
 } from "react-native";
 
-import MapView, { Marker } from "react-native-maps";
 
-import api from "../../services/api";
+
+import { auth, db } from "../../services/firebase";
+
+
 
 export default function BookRideScreen() {
 
-  // ------------------------------------------------
-  // TEXT VALUES
-  // ------------------------------------------------
+  // =========================================================
+
+  // PICKUP LOCATION
+
+  // =========================================================
+
+
 
   const [pickupLocation, setPickupLocation] = useState("");
-  const [dropoffLocation, setDropoffLocation] = useState("");
 
-  // ------------------------------------------------
-  // PICKUP COORDINATES
-  // ------------------------------------------------
+  const [pickupLatitude, setPickupLatitude] =
 
-  const [latitude, setLatitude] =
     useState<number | null>(null);
 
-  const [longitude, setLongitude] =
+  const [pickupLongitude, setPickupLongitude] =
+
     useState<number | null>(null);
 
-  // ------------------------------------------------
-  // DESTINATION COORDINATES
-  // ------------------------------------------------
 
-  const [dropoffLatitude, setDropoffLatitude] =
+
+  // =========================================================
+
+  // DROP LOCATION
+
+  // =========================================================
+
+
+
+  const [dropLocation, setDropLocation] = useState("");
+
+  const [dropLatitude, setDropLatitude] =
+
     useState<number | null>(null);
 
-  const [dropoffLongitude, setDropoffLongitude] =
+  const [dropLongitude, setDropLongitude] =
+
     useState<number | null>(null);
 
-  // ------------------------------------------------
-  // LOADING STATES
-  // ------------------------------------------------
 
-  const [locationLoading, setLocationLoading] =
+
+  // =========================================================
+
+  // STATES
+
+  // =========================================================
+
+
+
+  const [gettingLocation, setGettingLocation] =
+
     useState(true);
 
-  const [destinationLoading, setDestinationLoading] =
+
+
+  const [findingLocation, setFindingLocation] =
+
     useState(false);
 
-  const [booking, setBooking] =
+
+
+  const [booking, setBooking] = useState(false);
+
+
+
+  const [waitingForDriver, setWaitingForDriver] =
+
     useState(false);
 
-  // ------------------------------------------------
-  // MAP REFERENCE
-  // ------------------------------------------------
 
-  const mapRef = useRef<MapView>(null);
 
-  // ------------------------------------------------
-  // RUN WHEN SCREEN OPENS
-  // ------------------------------------------------
+  const [rideId, setRideId] = useState<string | null>(
+
+    null
+
+  );
+
+
+
+  // =========================================================
+
+  // FIRESTORE LISTENER
+
+  // =========================================================
+
+
+
+  const unsubscribeRef = useRef<(() => void) | null>(
+
+    null
+
+  );
+
+
+
+  const navigatingRef = useRef(false);
+
+
+
+  // =========================================================
+
+  // GET CURRENT LOCATION WHEN SCREEN OPENS
+
+  // =========================================================
+
+
 
   useEffect(() => {
+
     getCurrentLocation();
+
+
+
+    return () => {
+
+      stopRideListener();
+
+    };
+
   }, []);
 
-  // ------------------------------------------------
-  // GET PHONE CURRENT LOCATION
-  // ------------------------------------------------
+
+
+  // =========================================================
+
+  // GET CURRENT GPS LOCATION
+
+  // =========================================================
+
+
 
   const getCurrentLocation = async () => {
 
     try {
 
-      setLocationLoading(true);
+      setGettingLocation(true);
+
+
+
+      console.log("Requesting location permission...");
+
+
 
       const { status } =
+
         await Location.requestForegroundPermissionsAsync();
+
+
 
       if (status !== "granted") {
 
         Alert.alert(
-          "Permission Required",
-          "Please allow location access to book a ride."
+
+          "Location Permission Required",
+
+          "Please allow location access to use your current location."
+
         );
 
+
+
         return;
+
       }
 
+
+
       const location =
+
         await Location.getCurrentPositionAsync({
+
           accuracy: Location.Accuracy.High,
+
         });
 
-      const currentLatitude =
-        location.coords.latitude;
 
-      const currentLongitude =
-        location.coords.longitude;
 
-      setLatitude(currentLatitude);
-      setLongitude(currentLongitude);
+      const latitude = location.coords.latitude;
 
-      console.log(
-        "Current GPS:",
-        currentLatitude,
-        currentLongitude
-      );
+      const longitude = location.coords.longitude;
 
-      // ------------------------------------------------
-      // CONVERT GPS TO PICKUP ADDRESS
-      // ------------------------------------------------
+
+
+      console.log("CURRENT LATITUDE:", latitude);
+
+      console.log("CURRENT LONGITUDE:", longitude);
+
+
+
+      setPickupLatitude(latitude);
+
+      setPickupLongitude(longitude);
+
+
+
+      // -------------------------------------------------------
+
+      // Convert current GPS coordinates to address
+
+      // -------------------------------------------------------
+
+
 
       try {
 
-        const addressResult =
+        const addresses =
+
           await Location.reverseGeocodeAsync({
-            latitude: currentLatitude,
-            longitude: currentLongitude,
+
+            latitude,
+
+            longitude,
+
           });
 
-        if (addressResult.length > 0) {
 
-          const address = addressResult[0];
 
-          const pickupAddress = [
+        console.log(
+
+          "CURRENT LOCATION ADDRESS:",
+
+          addresses
+
+        );
+
+
+
+        if (addresses.length > 0) {
+
+          const address = addresses[0];
+
+
+
+          const parts = [
+
             address.name,
-            address.street,
-            address.district,
-            address.city,
-            address.region,
-          ]
-            .filter(Boolean)
-            .join(", ");
 
-          setPickupLocation(pickupAddress);
+            address.street,
+
+            address.district,
+
+            address.city,
+
+            address.region,
+
+            address.postalCode,
+
+          ].filter(Boolean);
+
+
+
+          const formattedAddress =
+
+            parts.join(", ");
+
+
+
+          setPickupLocation(
+
+            formattedAddress ||
+
+              `${latitude.toFixed(
+
+                6
+
+              )}, ${longitude.toFixed(6)}`
+
+          );
+
+        } else {
+
+          setPickupLocation(
+
+            `${latitude.toFixed(
+
+              6
+
+            )}, ${longitude.toFixed(6)}`
+
+          );
+
         }
 
       } catch (error) {
 
         console.log(
-          "Reverse geocoding error:",
+
+          "REVERSE GEOCODING ERROR:",
+
           error
+
         );
 
-        // Map can still work even if address lookup fails
-        setPickupLocation("Current Location");
+
+
+        // Even if address lookup fails,
+
+        // keep the GPS coordinates.
+
+        setPickupLocation(
+
+          `${latitude.toFixed(
+
+            6
+
+          )}, ${longitude.toFixed(6)}`
+
+        );
+
       }
 
     } catch (error) {
 
-      console.error(
-        "Location error:",
+      console.log(
+
+        "CURRENT LOCATION ERROR:",
+
         error
+
       );
 
+
+
       Alert.alert(
+
         "Location Error",
+
         "Unable to get your current location."
+
       );
 
     } finally {
 
-      setLocationLoading(false);
+      setGettingLocation(false);
 
     }
+
   };
 
-  // ------------------------------------------------
-  // FIND DESTINATION FROM TEXT
-  // ------------------------------------------------
 
-  const findDestination = async () => {
 
-    if (!dropoffLocation.trim()) {
+  // =========================================================
+
+  // FIND DROP LOCATION
+
+  // =========================================================
+
+
+
+  const findDropLocation = async () => {
+
+    const searchText = dropLocation.trim();
+
+
+
+    if (!searchText) {
 
       Alert.alert(
-        "Destination Required",
-        "Please enter your destination."
+
+        "Enter Drop Location",
+
+        "Please enter a place or address in the Drop Location box."
+
       );
 
+
+
       return;
+
     }
+
+
 
     try {
 
-      setDestinationLoading(true);
+      setFindingLocation(true);
 
-      // Convert typed address/place into coordinates
-      const results =
-        await Location.geocodeAsync(
-          dropoffLocation.trim()
-        );
 
-      if (results.length === 0) {
-
-        Alert.alert(
-          "Location Not Found",
-          "We could not find that destination."
-        );
-
-        return;
-      }
-
-      const destination = results[0];
-
-      const destinationLatitude =
-        destination.latitude;
-
-      const destinationLongitude =
-        destination.longitude;
-
-      setDropoffLatitude(
-        destinationLatitude
-      );
-
-      setDropoffLongitude(
-        destinationLongitude
-      );
 
       console.log(
-        "Destination:",
-        destinationLatitude,
-        destinationLongitude
+
+        "Searching for drop location:",
+
+        searchText
+
       );
 
-      // ------------------------------------------------
-      // SHOW BOTH LOCATIONS ON MAP
-      // ------------------------------------------------
+
+
+      // -------------------------------------------------------
+
+      // Use online geocoding
+
+      // -------------------------------------------------------
+
+
+
+      const url =
+
+        "https://photon.komoot.io/api/?q=" +
+
+        encodeURIComponent(searchText) +
+
+        "&limit=5";
+
+
+
+      console.log(
+
+        "LOCATION SEARCH URL:",
+
+        url
+
+      );
+
+
+
+      const response = await fetch(url);
+
+
+
+      console.log(
+
+        "LOCATION SEARCH STATUS:",
+
+        response.status
+
+      );
+
+
+
+      if (!response.ok) {
+
+        throw new Error(
+
+          `Location search failed: ${response.status}`
+
+        );
+
+      }
+
+
+
+      const data = await response.json();
+
+
+
+      console.log(
+
+        "LOCATION SEARCH RESULT:",
+
+        JSON.stringify(data)
+
+      );
+
+
 
       if (
-        latitude !== null &&
-        longitude !== null
+
+        !data.features ||
+
+        data.features.length === 0
+
       ) {
 
-        mapRef.current?.fitToCoordinates(
-          [
-            {
-              latitude: latitude,
-              longitude: longitude,
-            },
-            {
-              latitude: destinationLatitude,
-              longitude: destinationLongitude,
-            },
-          ],
-          {
-            edgePadding: {
-              top: 80,
-              right: 80,
-              bottom: 80,
-              left: 80,
-            },
+        Alert.alert(
 
-            animated: true,
-          }
+          "Location Not Found",
+
+          `Could not find "${searchText}". Try entering a more specific place or address.`
+
         );
+
+
+
+        return;
+
       }
+
+
+
+      // -------------------------------------------------------
+
+      // First result
+
+      // -------------------------------------------------------
+
+
+
+      const result = data.features[0];
+
+
+
+      const coordinates =
+
+        result.geometry?.coordinates;
+
+
+
+      if (
+
+        !coordinates ||
+
+        coordinates.length < 2
+
+      ) {
+
+        Alert.alert(
+
+          "Location Error",
+
+          "The location was found, but coordinates were not available."
+
+        );
+
+
+
+        return;
+
+      }
+
+
+
+      const longitude = Number(
+
+        coordinates[0]
+
+      );
+
+
+
+      const latitude = Number(
+
+        coordinates[1]
+
+      );
+
+
+
+      console.log(
+
+        "DROP LATITUDE:",
+
+        latitude
+
+      );
+
+
+
+      console.log(
+
+        "DROP LONGITUDE:",
+
+        longitude
+
+      );
+
+
+
+      // -------------------------------------------------------
+
+      // Save coordinates
+
+      // -------------------------------------------------------
+
+
+
+      setDropLatitude(latitude);
+
+      setDropLongitude(longitude);
+
+
+
+      // -------------------------------------------------------
+
+      // Create readable address
+
+      // -------------------------------------------------------
+
+
+
+      const properties =
+
+        result.properties || {};
+
+
+
+      const addressParts = [
+
+        properties.name,
+
+        properties.street,
+
+        properties.city,
+
+        properties.district,
+
+        properties.state,
+
+        properties.country,
+
+      ].filter(Boolean);
+
+
+
+      const foundAddress =
+
+        addressParts.join(", ");
+
+
+
+      if (foundAddress) {
+
+        setDropLocation(foundAddress);
+
+      }
+
+
+
+      Alert.alert(
+
+        "Location Found",
+
+        foundAddress ||
+
+          searchText
+
+      );
 
     } catch (error) {
 
-      console.error(
-        "Destination search error:",
+      console.log(
+
+        "FIND LOCATION ERROR:",
+
         error
+
       );
 
+
+
       Alert.alert(
-        "Search Error",
-        "Unable to find this destination."
+
+        "Location Error",
+
+        "Unable to search for this location. Please check your internet connection."
+
       );
 
     } finally {
 
-      setDestinationLoading(false);
+      setFindingLocation(false);
 
     }
+
   };
 
-  // ------------------------------------------------
-  // LOGOUT
-  // ------------------------------------------------
 
-  const logout = async () => {
 
-    await AsyncStorage.removeItem("token");
+  // =========================================================
 
-    router.replace("/auth/login");
-  };
-
-  // ------------------------------------------------
   // BOOK RIDE
-  // ------------------------------------------------
 
-  const bookRide = async () => {
+  // =========================================================
+  // CALCULATE DISTANCE BETWEEN TWO GPS LOCATIONS
+  // =========================================================
 
-    if (!pickupLocation.trim()) {
+  const calculateDistanceKm = (
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number
+  ) => {
+    const R = 6371;
 
-      Alert.alert(
-        "Pickup Required",
-        "Pickup location is required."
+    const dLat =
+      ((lat2 - lat1) * Math.PI) / 180;
+    const dLon =
+      ((lon2 - lon1) * Math.PI) / 180;
+
+    const a =
+      Math.sin(dLat / 2) *
+        Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+
+    const c =
+      2 *
+      Math.atan2(
+        Math.sqrt(a),
+        Math.sqrt(1 - a)
       );
 
-      return;
-    }
+    return R * c;
+  };
 
-    if (!dropoffLocation.trim()) {
+  // =========================================================
+  // FIND NEAREST AVAILABLE DRIVER
+  // =========================================================
 
-      Alert.alert(
-        "Destination Required",
-        "Please enter a destination."
+  const findNearestDriver = async (
+    latitude: number,
+    longitude: number
+  ) => {
+    try {
+      console.log(
+        "🔎 Finding nearest available driver..."
       );
 
-      return;
+      const driversQuery = query(
+        collection(db, "drivers"),
+        where("isAvailable", "==", true)
+      );
+
+      const snapshot = await getDocs(
+        driversQuery
+      );
+
+      console.log(
+        "🚗 Available drivers found:",
+        snapshot.size
+      );
+
+      if (snapshot.empty) {
+        console.log(
+          "❌ No available drivers."
+        );
+        return null;
+      }
+
+      let nearestDriver: any = null;
+      let shortestDistance = Infinity;
+
+      snapshot.forEach((driverDoc) => {
+        const driver = driverDoc.data();
+
+        if (
+          typeof driver.latitude !== "number" ||
+          typeof driver.longitude !== "number"
+        ) {
+          console.log(
+            "⚠️ Driver has no GPS location:",
+            driverDoc.id
+          );
+          return;
+        }
+
+        const distance = calculateDistanceKm(
+          latitude,
+          longitude,
+          driver.latitude,
+          driver.longitude
+        );
+
+        console.log(
+          "🚗 Driver:",
+          driverDoc.id,
+          "Distance:",
+          distance.toFixed(2),
+          "km"
+        );
+
+        if (distance < shortestDistance) {
+          shortestDistance = distance;
+          nearestDriver = {
+            id: driverDoc.id,
+            ...driver,
+            distanceKm: distance,
+          };
+        }
+      });
+
+      if (!nearestDriver) {
+        console.log(
+          "❌ No driver with valid GPS location."
+        );
+        return null;
+      }
+
+      console.log(
+        "✅ NEAREST DRIVER:",
+        nearestDriver.id
+      );
+
+      console.log(
+        "📏 DISTANCE:",
+        nearestDriver.distanceKm.toFixed(2),
+        "km"
+      );
+
+      return nearestDriver;
+    } catch (error) {
+      console.error(
+        "❌ FIND NEAREST DRIVER ERROR:",
+        error
+      );
+      return null;
     }
+  };
+
+  // =========================================================
+  // BOOK RIDE
+  // =========================================================
+
+
+
+  const handleBookRide = async () => {
+
+    // -------------------------------------------------------
+
+    // Check pickup
+
+    // -------------------------------------------------------
+
+
 
     if (
-      latitude === null ||
-      longitude === null
+
+      pickupLatitude === null ||
+
+      pickupLongitude === null
+
     ) {
 
       Alert.alert(
-        "Location Required",
-        "Your current GPS location is unavailable."
+
+        "Pickup Location",
+
+        "Please wait for the current location to load."
+
       );
 
+
+
       return;
+
     }
 
+
+
+    // -------------------------------------------------------
+
+    // Check drop text
+
+    // -------------------------------------------------------
+
+
+
+    if (!dropLocation.trim()) {
+
+      Alert.alert(
+
+        "Drop Location",
+
+        "Please enter your destination."
+
+      );
+
+
+
+      return;
+
+    }
+
+
+
+    // -------------------------------------------------------
+
+    // Check whether Find was pressed
+
+    // -------------------------------------------------------
+
+
+
     if (
-      dropoffLatitude === null ||
-      dropoffLongitude === null
+
+      dropLatitude === null ||
+
+      dropLongitude === null
+
     ) {
 
       Alert.alert(
-        "Find Destination",
-        "Please press FIND LOCATION before booking."
+
+        "Find Location",
+
+        "Please press Find Location to find the destination before booking."
+
       );
 
+
+
       return;
+
     }
+
+
+
+    // -------------------------------------------------------
+
+    // Firebase authentication
+
+    // -------------------------------------------------------
+
+
+
+    const currentUser = auth.currentUser;
+
+
+
+    if (!currentUser) {
+
+      Alert.alert(
+
+        "Login Required",
+
+        "Please login again."
+
+      );
+
+
+
+      router.replace("/login");
+
+
+
+      return;
+
+    }
+
+
 
     try {
 
       setBooking(true);
 
-      const token =
-        await AsyncStorage.getItem("token");
 
-      if (!token) {
 
-        Alert.alert(
-          "Session Expired",
-          "Please login again."
-        );
+      const riderId = currentUser.uid;
 
-        router.replace("/auth/login");
+      const riderEmail =
+        currentUser.email || "";
 
-        return;
-      }
+      // -------------------------------------------------------
+      // Find nearest available driver
+      // -------------------------------------------------------
 
-      // ------------------------------------------------
-      // SEND RIDE TO .NET API
-      // ------------------------------------------------
-
-      const response =
-        await api.post(
-          "/Ride/book",
-
-          {
-            pickupLocation:
-              pickupLocation.trim(),
-
-            dropoffLocation:
-              dropoffLocation.trim(),
-
-            pickupLatitude:
-              latitude,
-
-            pickupLongitude:
-              longitude,
-
-            // We are preparing these for backend support
-            dropoffLatitude:
-              dropoffLatitude,
-
-            dropoffLongitude:
-              dropoffLongitude,
-          },
-
-          {
-            headers: {
-              Authorization:
-                `Bearer ${token}`,
-            },
-          }
+      const nearestDriver =
+        await findNearestDriver(
+          pickupLatitude,
+          pickupLongitude
         );
 
       console.log(
-        "Ride booking response:",
-        response.data
+        "NEAREST DRIVER RESULT:",
+        nearestDriver
       );
 
-      Alert.alert(
-        "Ride Booked",
-        typeof response.data === "string"
-          ? response.data
-          : "Your ride has been booked successfully."
+
+
+      console.log(
+
+        "RIDER FIREBASE UID:",
+
+        riderId
+
       );
 
-    } catch (error: any) {
 
-      console.error(
-        "Booking error:",
-        error?.response?.data || error
+
+      // -------------------------------------------------------
+
+      // Ride document
+
+      // -------------------------------------------------------
+
+
+
+      const rideData = {
+
+        riderId: riderId,
+
+
+
+        riderEmail: riderEmail,
+
+
+
+        pickupLocation:
+
+          pickupLocation.trim(),
+
+
+
+        pickupLatitude:
+
+          pickupLatitude,
+
+
+
+        pickupLongitude:
+
+          pickupLongitude,
+
+
+
+        dropLocation:
+
+          dropLocation.trim(),
+
+
+
+        dropLatitude:
+
+          dropLatitude,
+
+
+
+        dropLongitude:
+
+          dropLongitude,
+
+
+
+        // Assign the nearest available driver
+        driverId:
+          nearestDriver?.id || null,
+
+        driverName:
+          nearestDriver?.fullName || null,
+
+
+
+        driverLatitude: null,
+
+
+
+        driverLongitude: null,
+
+
+
+        // Initial status
+
+        status: "requested",
+
+
+
+        createdAt:
+
+          serverTimestamp(),
+
+
+
+        acceptedAt: null,
+
+
+
+        startedAt: null,
+
+
+
+        completedAt: null,
+
+      };
+
+
+
+      console.log(
+
+        "CREATING RIDE:",
+
+        rideData
+
       );
 
-      if (error?.response) {
 
-        const message =
-          typeof error.response.data === "string"
-            ? error.response.data
-            : error.response.data?.message ||
-              "Booking failed.";
 
-        Alert.alert(
-          "Booking Failed",
-          message
+      // -------------------------------------------------------
+
+      // Create Firestore ride
+
+      // -------------------------------------------------------
+
+
+
+      const rideRef = await addDoc(
+
+        collection(db, "rides"),
+
+        rideData
+
+      );
+
+
+
+      const newRideId = rideRef.id;
+
+
+
+      console.log(
+
+        "RIDE CREATED:",
+
+        newRideId
+
+      );
+
+
+
+     
+      if (nearestDriver) {
+        console.log(
+          "🚕 RIDE ASSIGNED TO NEAREST DRIVER:",
+          nearestDriver.id
         );
 
-      } else if (error?.request) {
-
-        Alert.alert(
-          "Network Error",
-          "Unable to connect to the API."
+        console.log(
+          "📏 DRIVER DISTANCE:",
+          nearestDriver.distanceKm.toFixed(2),
+          "km"
         );
-
       } else {
-
-        Alert.alert(
-          "Error",
-          "Something went wrong."
+        console.log(
+          "⚠️ RIDE CREATED WITHOUT DRIVER ASSIGNMENT."
         );
       }
+
+
+
+ setRideId(newRideId);
+
+
+
+      setWaitingForDriver(true);
+
+
+
+      navigatingRef.current = false;
+
+
+
+      // -------------------------------------------------------
+
+      // Start real-time listener
+
+      // -------------------------------------------------------
+
+
+
+      listenToRide(newRideId);
+
+    } catch (error) {
+
+      console.log(
+
+        "CREATE RIDE ERROR:",
+
+        error
+
+      );
+
+
+
+      Alert.alert(
+
+        "Booking Error",
+
+        "Unable to create the ride. Please try again."
+
+      );
 
     } finally {
 
       setBooking(false);
 
     }
+
   };
 
-  // ------------------------------------------------
+
+
+  // =========================================================
+
+  // LISTEN TO FIRESTORE RIDE
+
+  // =========================================================
+
+
+
+  const listenToRide = (
+
+    currentRideId: string
+
+  ) => {
+
+    stopRideListener();
+
+
+
+    console.log(
+
+      "STARTING REAL-TIME RIDE LISTENER:",
+
+      currentRideId
+
+    );
+
+
+
+    const rideRef = doc(
+
+      db,
+
+      "rides",
+
+      currentRideId
+
+    );
+
+
+
+    const unsubscribe = onSnapshot(
+
+      rideRef,
+
+      (snapshot) => {
+
+        if (!snapshot.exists()) {
+
+          console.log(
+
+            "Ride document does not exist."
+
+          );
+
+
+
+          return;
+
+        }
+
+
+
+        const ride = snapshot.data();
+
+
+
+        console.log(
+
+          "REAL-TIME RIDE UPDATE:",
+
+          ride
+
+        );
+
+
+
+        const status = ride.status;
+
+
+
+        console.log(
+
+          "CURRENT RIDE STATUS:",
+
+          status
+
+        );
+
+
+
+        // =====================================================
+
+        // DRIVER ACCEPTED
+
+        // =====================================================
+
+
+
+        if (
+
+          status === "accepted" &&
+
+          !navigatingRef.current
+
+        ) {
+
+          console.log(
+
+            "DRIVER ACCEPTED RIDE"
+
+          );
+
+
+
+          navigatingRef.current = true;
+
+
+
+          stopRideListener();
+
+
+
+          setWaitingForDriver(false);
+
+
+
+          router.push({
+
+            pathname: "/rideprogress",
+
+            params: {
+
+              rideId: currentRideId,
+
+            },
+
+          });
+
+
+
+          return;
+
+        }
+
+
+
+        // =====================================================
+
+        // DRIVER ARRIVED
+
+        // =====================================================
+
+
+
+        if (
+
+          status === "driverArrived" &&
+
+          !navigatingRef.current
+
+        ) {
+
+          console.log(
+
+            "DRIVER ARRIVED"
+
+          );
+
+
+
+          navigatingRef.current = true;
+
+
+
+          stopRideListener();
+
+
+
+          setWaitingForDriver(false);
+
+
+
+          router.push({
+
+            pathname: "/rideprogress",
+
+            params: {
+
+              rideId: currentRideId,
+
+            },
+
+          });
+
+
+
+          return;
+
+        }
+
+
+
+        // =====================================================
+
+        // RIDE STARTED
+
+        // =====================================================
+
+
+
+        if (
+
+          status === "inProgress" &&
+
+          !navigatingRef.current
+
+        ) {
+
+          console.log(
+
+            "RIDE STARTED"
+
+          );
+
+
+
+          navigatingRef.current = true;
+
+
+
+          stopRideListener();
+
+
+
+          setWaitingForDriver(false);
+
+
+
+          router.push({
+
+            pathname: "/rideprogress",
+
+            params: {
+
+              rideId: currentRideId,
+
+            },
+
+          });
+
+
+
+          return;
+
+        }
+
+
+
+        // =====================================================
+
+        // RIDE CANCELLED
+
+        // =====================================================
+
+
+
+        if (
+
+          status === "cancelled" ||
+
+          status === "canceled"
+
+        ) {
+
+          console.log(
+
+            "RIDE CANCELLED"
+
+          );
+
+
+
+          stopRideListener();
+
+
+
+          setWaitingForDriver(false);
+
+
+
+          Alert.alert(
+
+            "Ride Cancelled",
+
+            "The driver cancelled the ride."
+
+          );
+
+
+
+          return;
+
+        }
+
+
+
+        // =====================================================
+
+        // RIDE COMPLETED
+
+        // =====================================================
+
+
+
+        if (status === "completed") {
+
+          console.log(
+
+            "RIDE COMPLETED"
+
+          );
+
+
+
+          stopRideListener();
+
+
+
+          setWaitingForDriver(false);
+
+
+
+          return;
+
+        }
+
+      },
+
+      (error) => {
+
+        console.log(
+
+          "FIRESTORE RIDE LISTENER ERROR:",
+
+          error
+
+        );
+
+
+
+        Alert.alert(
+
+          "Real-time Error",
+
+          "Unable to listen for ride updates."
+
+        );
+
+      }
+
+    );
+
+
+
+    unsubscribeRef.current =
+
+      unsubscribe;
+
+  };
+
+
+
+  // =========================================================
+
+  // STOP FIRESTORE LISTENER
+
+  // =========================================================
+
+
+
+  const stopRideListener = () => {
+
+    if (unsubscribeRef.current) {
+
+      unsubscribeRef.current();
+
+
+
+      unsubscribeRef.current = null;
+
+    }
+
+  };
+
+
+
+  // =========================================================
+
+  // CANCEL WAITING
+
+  // =========================================================
+
+
+
+  const handleCancel = () => {
+
+    stopRideListener();
+
+
+
+    setWaitingForDriver(false);
+
+
+
+    setRideId(null);
+
+
+
+    navigatingRef.current = false;
+
+  };
+
+
+
+  // =========================================================
+
   // UI
-  // ------------------------------------------------
+
+  // =========================================================
+
+
 
   return (
 
     <View style={styles.container}>
 
+
+
+      {/* =====================================================
+
+          TITLE
+
+      ===================================================== */}
+
+
+
       <Text style={styles.title}>
-        🚖 Book Your Ride
+
+        Book a Ride
+
       </Text>
 
-      {/* MAP */}
 
-      <View style={styles.mapContainer}>
 
-        {locationLoading ? (
+      {!waitingForDriver && (
 
-          <View style={styles.loadingContainer}>
+        <>
 
-            <ActivityIndicator
-              size="large"
+          {/* =================================================
+
+              PICKUP
+
+          ================================================= */}
+
+
+
+          <Text style={styles.label}>
+
+            Pickup Location
+
+          </Text>
+
+
+
+          <View style={styles.locationRow}>
+
+
+
+            <TextInput
+
+              style={styles.locationInput}
+
+              placeholder="Getting current location..."
+
+              value={pickupLocation}
+
+              onChangeText={
+
+                setPickupLocation
+
+              }
+
+              editable={!gettingLocation}
+
             />
 
-            <Text style={styles.loadingText}>
-              Finding your location...
-            </Text>
 
-          </View>
 
-        ) : (
-          
-          latitude !== null &&
-          longitude !== null && (
+            {gettingLocation && (
 
-            <MapView
+              <ActivityIndicator
 
-              ref={mapRef}
-
-              style={styles.map}
-
-              initialRegion={{
-                latitude: latitude,
-                longitude: longitude,
-                latitudeDelta: 0.02,
-                longitudeDelta: 0.02,
-              }}
-
-              showsUserLocation={true}
-
-              showsMyLocationButton={true}
-            >
-
-              {/* PICKUP MARKER */}
-
-              <Marker
-
-                coordinate={{
-                  latitude: latitude,
-                  longitude: longitude,
-                }}
-
-                title="Pickup"
-
-                description={
-                  pickupLocation ||
-                  "Your current location"
-                }
+                size="small"
 
               />
 
-              {/* DESTINATION MARKER */}
+            )}
 
-              {dropoffLatitude !== null &&
-                dropoffLongitude !== null && (
 
-                  <Marker
 
-                    coordinate={{
-                      latitude:
-                        dropoffLatitude,
+          </View>
 
-                      longitude:
-                        dropoffLongitude,
-                    }}
 
-                    title="Destination"
 
-                    description={
-                      dropoffLocation
-                    }
+          <TouchableOpacity
 
-                  />
+            style={
+
+              styles.currentLocationButton
+
+            }
+
+            onPress={
+
+              getCurrentLocation
+
+            }
+
+            disabled={
+
+              gettingLocation
+
+            }
+
+          >
+
+            <Text
+
+              style={
+
+                styles.currentLocationText
+
+              }
+
+            >
+
+              📍 Use Current Location
+
+            </Text>
+
+          </TouchableOpacity>
+
+
+
+          {pickupLatitude !== null &&
+
+            pickupLongitude !== null && (
+
+              <Text
+
+                style={styles.coordinates}
+
+              >
+
+                Pickup GPS:{" "}
+
+                {pickupLatitude.toFixed(
+
+                  6
 
                 )}
 
-            </MapView>
+                ,{" "}
 
-          )
-        )}
+                {pickupLongitude.toFixed(
 
-      </View>
+                  6
 
-      {/* PICKUP */}
+                )}
 
-      <Text style={styles.label}>
-        Pickup Location
-      </Text>
+              </Text>
 
-      <TextInput
+            )}
 
-        style={styles.input}
 
-        placeholder="Current location"
 
-        value={pickupLocation}
+          {/* =================================================
 
-        onChangeText={
-          setPickupLocation
-        }
+              DROP LOCATION
 
-      />
+          ================================================= */}
 
-      {/* DESTINATION */}
 
-      <Text style={styles.label}>
-        Destination
-      </Text>
 
-      <TextInput
+          <Text style={styles.label}>
 
-        style={styles.input}
+            Drop Location
 
-        placeholder="Example: Lulu Mall"
-
-        value={dropoffLocation}
-
-        onChangeText={(text) => {
-
-          setDropoffLocation(text);
-
-          // Remove old destination marker
-          // when user changes destination
-
-          setDropoffLatitude(null);
-          setDropoffLongitude(null);
-        }}
-
-      />
-
-      {/* FIND LOCATION */}
-
-      <Pressable
-
-        style={styles.findButton}
-
-        onPress={findDestination}
-
-        disabled={destinationLoading}
-      >
-
-        {destinationLoading ? (
-
-          <ActivityIndicator />
-
-        ) : (
-
-          <Text style={styles.findButtonText}>
-            FIND LOCATION
           </Text>
 
-        )}
 
-      </Pressable>
 
-      {/* BOOK RIDE */}
+          <View style={styles.dropRow}>
 
-      <Pressable
 
-        style={[
-          styles.bookButton,
-          booking &&
-            styles.disabledButton,
-        ]}
 
-        onPress={bookRide}
+            <TextInput
 
-        disabled={booking}
-      >
+              style={styles.dropInput}
 
-        {booking ? (
+              placeholder="Enter destination"
 
-          <ActivityIndicator />
+              value={dropLocation}
 
-        ) : (
+              onChangeText={(text) => {
 
-          <Text style={styles.bookButtonText}>
-            BOOK RIDE
+                setDropLocation(text);
+
+
+
+                // Destination changed,
+
+                // so previous coordinates are invalid.
+
+                setDropLatitude(null);
+
+                setDropLongitude(null);
+
+              }}
+
+            />
+
+
+
+            <TouchableOpacity
+
+              style={styles.findButton}
+
+              onPress={
+
+                findDropLocation
+
+              }
+
+              disabled={
+
+                findingLocation
+
+              }
+
+            >
+
+              {findingLocation ? (
+
+                <ActivityIndicator
+
+                  size="small"
+
+                  color="#fff"
+
+                />
+
+              ) : (
+
+                <Text
+
+                  style={
+
+                    styles.findButtonText
+
+                  }
+
+                >
+
+                  Find
+
+                </Text>
+
+              )}
+
+            </TouchableOpacity>
+
+
+
+          </View>
+
+
+
+          {dropLatitude !== null &&
+
+            dropLongitude !== null && (
+
+              <Text
+
+                style={styles.coordinates}
+
+              >
+
+                Drop GPS:{" "}
+
+                {dropLatitude.toFixed(
+
+                  6
+
+                )}
+
+                ,{" "}
+
+                {dropLongitude.toFixed(
+
+                  6
+
+                )}
+
+              </Text>
+
+            )}
+
+
+
+          {/* =================================================
+
+              BOOK RIDE
+
+          ================================================= */}
+
+
+
+          <TouchableOpacity
+
+            style={[
+
+              styles.bookButton,
+
+              (booking ||
+
+                gettingLocation ||
+
+                findingLocation) &&
+
+                styles.disabledButton,
+
+            ]}
+
+            onPress={
+
+              handleBookRide
+
+            }
+
+            disabled={
+
+              booking ||
+
+              gettingLocation ||
+
+              findingLocation
+
+            }
+
+          >
+
+            {booking ? (
+
+              <ActivityIndicator
+
+                color="#fff"
+
+              />
+
+            ) : (
+
+              <Text
+
+                style={
+
+                  styles.bookButtonText
+
+                }
+
+              >
+
+                Book Ride
+
+              </Text>
+
+            )}
+
+          </TouchableOpacity>
+
+        </>
+
+      )}
+
+
+
+      {/* =====================================================
+
+          WAITING FOR DRIVER
+
+      ===================================================== */}
+
+
+
+      {waitingForDriver && (
+
+        <View
+
+          style={
+
+            styles.waitingContainer
+
+          }
+
+        >
+
+
+
+          <ActivityIndicator
+
+            size="large"
+
+          />
+
+
+
+          <Text
+
+            style={
+
+              styles.waitingTitle
+
+            }
+
+          >
+
+            Waiting for Driver
+
           </Text>
 
-        )}
 
-      </Pressable>
 
-      {/* LOGOUT */}
+          <Text
 
-      <Pressable
-        style={styles.logoutButton}
-        onPress={logout}
-      >
+            style={styles.waitingText}
 
-        <Text style={styles.logoutText}>
-          ← Logout
-        </Text>
+          >
 
-      </Pressable>
+            Your ride has been created.
+
+          </Text>
+
+
+
+          <Text
+
+            style={styles.waitingText}
+
+          >
+
+            Waiting for a driver to
+
+            accept your ride...
+
+          </Text>
+
+
+
+          {rideId && (
+
+            <Text style={styles.rideId}>
+
+              Ride ID: {rideId}
+
+            </Text>
+
+          )}
+
+
+
+          <Text
+
+            style={
+
+              styles.realtimeText
+
+            }
+
+          >
+
+            ● Listening for driver
+
+          </Text>
+
+
+
+          <TouchableOpacity
+
+            style={
+
+              styles.cancelButton
+
+            }
+
+            onPress={
+
+              handleCancel
+
+            }
+
+          >
+
+            <Text
+
+              style={
+
+                styles.cancelButtonText
+
+              }
+
+            >
+
+              Cancel
+
+            </Text>
+
+          </TouchableOpacity>
+
+
+
+        </View>
+
+      )}
+
+
 
     </View>
+
   );
+
 }
 
-// ------------------------------------------------
+
+
+// ============================================================
+
 // STYLES
-// ------------------------------------------------
+
+// ============================================================
+
+
 
 const styles = StyleSheet.create({
 
   container: {
+
     flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 45,
+
+    padding: 20,
+
     backgroundColor: "#fff",
+
   },
+
+
 
   title: {
-    fontSize: 26,
+
+    fontSize: 28,
+
     fontWeight: "bold",
+
+    marginBottom: 30,
+
     textAlign: "center",
-    marginBottom: 15,
+
   },
 
-  mapContainer: {
-    height: 240,
-    borderRadius: 15,
-    overflow: "hidden",
-    backgroundColor: "#f3f3f3",
-    marginBottom: 10,
-  },
 
-  map: {
-    flex: 1,
-  },
-
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  loadingText: {
-    marginTop: 10,
-    color: "#666",
-  },
 
   label: {
+
     fontSize: 16,
+
     fontWeight: "600",
+
+    marginBottom: 8,
+
     marginTop: 10,
-    marginBottom: 5,
+
   },
 
-  input: {
+
+
+  locationRow: {
+
+    flexDirection: "row",
+
+    alignItems: "center",
+
     borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 10,
-    padding: 13,
-    fontSize: 16,
-    backgroundColor: "#fafafa",
+
+    borderColor: "#ccc",
+
+    borderRadius: 8,
+
+    paddingRight: 12,
+
+    marginBottom: 5,
+
   },
+
+
+
+  locationInput: {
+
+    flex: 1,
+
+    padding: 14,
+
+    fontSize: 16,
+
+  },
+
+
+
+  currentLocationButton: {
+
+    alignSelf: "flex-start",
+
+    paddingVertical: 8,
+
+    paddingHorizontal: 5,
+
+    marginBottom: 5,
+
+  },
+
+
+
+  currentLocationText: {
+
+    color: "#007AFF",
+
+    fontSize: 15,
+
+    fontWeight: "600",
+
+  },
+
+
+
+  dropRow: {
+
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    marginBottom: 5,
+
+  },
+
+
+
+  dropInput: {
+
+    flex: 1,
+
+    borderWidth: 1,
+
+    borderColor: "#ccc",
+
+    borderRadius: 8,
+
+    padding: 14,
+
+    fontSize: 16,
+
+    marginRight: 8,
+
+  },
+
+
 
   findButton: {
-    marginTop: 12,
-    backgroundColor: "#e8e8e8",
-    padding: 13,
-    borderRadius: 10,
+
+    backgroundColor: "#34C759",
+
+    paddingVertical: 14,
+
+    paddingHorizontal: 18,
+
+    borderRadius: 8,
+
+    minWidth: 70,
+
     alignItems: "center",
+
   },
+
+
 
   findButtonText: {
-    fontWeight: "bold",
+
+    color: "#fff",
+
     fontSize: 15,
+
+    fontWeight: "bold",
+
   },
+
+
+
+  coordinates: {
+
+    fontSize: 12,
+
+    color: "#777",
+
+    marginBottom: 10,
+
+  },
+
+
 
   bookButton: {
-    marginTop: 15,
-    backgroundColor: "#000",
+
+    backgroundColor: "#007AFF",
+
     padding: 16,
-    borderRadius: 10,
+
+    borderRadius: 8,
+
     alignItems: "center",
+
+    marginTop: 20,
+
   },
 
-  bookButtonText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 18,
-  },
+
 
   disabledButton: {
+
     opacity: 0.6,
+
   },
 
-  logoutButton: {
-    alignSelf: "center",
-    padding: 15,
+
+
+  bookButtonText: {
+
+    color: "#fff",
+
+    fontSize: 18,
+
+    fontWeight: "bold",
+
   },
 
-  logoutText: {
-    color: "#0066ff",
+
+
+  waitingContainer: {
+
+    flex: 1,
+
+    justifyContent: "center",
+
+    alignItems: "center",
+
+    paddingHorizontal: 20,
+
+  },
+
+
+
+  waitingTitle: {
+
+    fontSize: 24,
+
+    fontWeight: "bold",
+
+    marginTop: 20,
+
+    marginBottom: 10,
+
+  },
+
+
+
+  waitingText: {
+
     fontSize: 16,
+
+    textAlign: "center",
+
+    marginBottom: 8,
+
+    color: "#555",
+
+    textAlignVertical: "center",
+
+  },
+
+
+
+  rideId: {
+
+    fontSize: 14,
+
+    marginTop: 15,
+
+    color: "#777",
+
+  },
+
+
+
+  realtimeText: {
+
+    marginTop: 10,
+
+    color: "#34C759",
+
+    fontSize: 14,
+
     fontWeight: "600",
+
+  },
+
+
+
+  cancelButton: {
+
+    marginTop: 30,
+
+    borderWidth: 1,
+
+    borderColor: "#FF3B30",
+
+    paddingVertical: 12,
+
+    paddingHorizontal: 40,
+
+    borderRadius: 8,
+
+  },
+
+  cancelButtonText: {
+
+    color: "#FF3B30",
+
+    fontSize: 16,
+
+    fontWeight: "600",
+
   },
 
 });

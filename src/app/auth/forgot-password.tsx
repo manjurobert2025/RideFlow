@@ -1,15 +1,15 @@
 import { router } from "expo-router";
 import { useState } from "react";
 import {
-    ActivityIndicator,
-    Pressable,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
 
-import { forgotPassword } from "../../../services/authService";
+import { resetPassword } from "../../../services/authService";
 
 export default function ForgotPasswordScreen() {
   const [email, setEmail] = useState("");
@@ -24,36 +24,60 @@ export default function ForgotPasswordScreen() {
     try {
       setLoading(true);
 
-      console.log("Sending rider reset email to:", email);
-
-      const response = await forgotPassword(email.trim());
-
-      console.log("Forgot password response:", response);
-
-      alert(
-        "Reset email sent. Please check your email for the reset token."
+      console.log(
+        "Sending Firebase password reset email to:",
+        email.trim()
       );
 
-      // Move to Reset Password screen
-      router.push({
-        pathname: "/auth/reset-password",
-        params: {
-          email: email.trim(),
-        },
-      });
-    } catch (error: any) {
-      console.log("Forgot password error:", error);
+      await resetPassword(email.trim());
 
-      if (error.response) {
-        console.log("Status:", error.response.status);
-        console.log("Data:", error.response.data);
+      console.log(
+        "Firebase password reset email sent."
+      );
+
+      alert(
+        "Password reset email sent. Please check your email and follow the reset link."
+      );
+
+      router.replace("/auth/login");
+    } catch (error: any) {
+      console.log(
+        "Forgot password error:",
+        error
+      );
+
+      let message =
+        "Unable to send password reset email. Please try again.";
+
+      if (
+        error?.code ===
+        "auth/invalid-email"
+      ) {
+        message =
+          "Please enter a valid email address.";
+      } else if (
+        error?.code ===
+        "auth/user-not-found"
+      ) {
+        message =
+          "No account was found with this email address.";
+      } else if (
+        error?.code ===
+        "auth/user-disabled"
+      ) {
+        message =
+          "This account has been disabled.";
+      } else if (
+        error?.code ===
+        "auth/network-request-failed"
+      ) {
+        message =
+          "Network error. Please check your internet connection.";
+      } else if (error?.message) {
+        message = error.message;
       }
 
-      alert(
-        error.response?.data?.message ||
-          error.response?.data ||
-          "Unable to send reset email. Please try again."
-      );
+      alert(message);
     } finally {
       setLoading(false);
     }
@@ -62,15 +86,18 @@ export default function ForgotPasswordScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.card}>
-        <Text style={styles.icon}>🔐</Text>
+        <Text style={styles.icon}>
+          🔐
+        </Text>
 
         <Text style={styles.title}>
           Forgot Password?
         </Text>
 
         <Text style={styles.subtitle}>
-          Enter your registered email address and we'll send you a
-          password reset token.
+          Enter your registered email address
+          and we'll send you a password reset
+          link.
         </Text>
 
         <TextInput
@@ -86,7 +113,8 @@ export default function ForgotPasswordScreen() {
         <Pressable
           style={[
             styles.button,
-            loading && styles.disabledButton,
+            loading &&
+              styles.disabledButton,
           ]}
           onPress={handleForgotPassword}
           disabled={loading}
@@ -94,14 +122,18 @@ export default function ForgotPasswordScreen() {
           {loading ? (
             <ActivityIndicator color="#ffffff" />
           ) : (
-            <Text style={styles.buttonText}>
+            <Text
+              style={styles.buttonText}
+            >
               SEND RESET EMAIL
             </Text>
           )}
         </Pressable>
 
         <Pressable
-          onPress={() => router.replace("/auth/login")}
+          onPress={() =>
+            router.replace("/auth/login")
+          }
         >
           <Text style={styles.backText}>
             Back to Login
