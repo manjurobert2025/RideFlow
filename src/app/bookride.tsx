@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -60,6 +61,13 @@ export default function BookRideScreen() {
 
   const [booking, setBooking] =
     useState(false);
+
+  // =========================================================
+  // SELECTED VEHICLE TYPE
+  // =========================================================
+
+  const [selectedVehicleType, setSelectedVehicleType] =
+    useState("Car");
 
   const [waitingForDriver, setWaitingForDriver] =
     useState(false);
@@ -670,7 +678,7 @@ export default function BookRideScreen() {
       );
 
       router.replace(
-        "/login"
+        "../login"
       );
 
       return;
@@ -734,6 +742,9 @@ export default function BookRideScreen() {
 
         riderEmail:
           riderEmail,
+
+        vehicleType:
+          selectedVehicleType,
 
         pickupLocation:
           pickupLocation.trim(),
@@ -1212,9 +1223,26 @@ export default function BookRideScreen() {
   // =========================================================
 
   return (
-    <View
-      style={styles.container}
+    <ScrollView
+      contentContainerStyle={styles.container}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={true}
     >
+      {/* =====================================================
+          BACK BUTTON
+      ===================================================== */}
+
+      <TouchableOpacity
+        style={styles.backButton}
+        onPress={() => {
+          router.replace("/");
+        }}
+      >
+        <Text style={styles.backButtonText}>
+          ← Back
+        </Text>
+      </TouchableOpacity>
+
       {/* =====================================================
           TITLE
       ===================================================== */}
@@ -1397,6 +1425,104 @@ export default function BookRideScreen() {
             )}
 
           {/* =================================================
+              VEHICLE TYPE
+          ================================================= */}
+
+          <Text
+            style={styles.label}
+          >
+            Select Vehicle
+          </Text>
+
+          <View
+            style={styles.vehicleTypeContainer}
+          >
+            <TouchableOpacity
+              style={[
+                styles.vehicleTypeButton,
+                selectedVehicleType === "Car" &&
+                  styles.selectedVehicleTypeButton,
+              ]}
+              onPress={() =>
+                setSelectedVehicleType("Car")
+              }
+            >
+              <Text
+                style={[
+                  styles.vehicleTypeText,
+                  selectedVehicleType === "Car" &&
+                    styles.selectedVehicleTypeText,
+                ]}
+              >
+                🚗 Car
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.vehicleTypeButton,
+                selectedVehicleType === "Auto" &&
+                  styles.selectedVehicleTypeButton,
+              ]}
+              onPress={() =>
+                setSelectedVehicleType("Auto")
+              }
+            >
+              <Text
+                style={[
+                  styles.vehicleTypeText,
+                  selectedVehicleType === "Auto" &&
+                    styles.selectedVehicleTypeText,
+                ]}
+              >
+                🛺 Auto
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.vehicleTypeButton,
+                selectedVehicleType === "Bike" &&
+                  styles.selectedVehicleTypeButton,
+              ]}
+              onPress={() =>
+                setSelectedVehicleType("Bike")
+              }
+            >
+              <Text
+                style={[
+                  styles.vehicleTypeText,
+                  selectedVehicleType === "Bike" &&
+                    styles.selectedVehicleTypeText,
+                ]}
+              >
+                🏍️ Bike
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.vehicleTypeButton,
+                selectedVehicleType === "Van" &&
+                  styles.selectedVehicleTypeButton,
+              ]}
+              onPress={() =>
+                setSelectedVehicleType("Van")
+              }
+            >
+              <Text
+                style={[
+                  styles.vehicleTypeText,
+                  selectedVehicleType === "Van" &&
+                    styles.selectedVehicleTypeText,
+                ]}
+              >
+                🚐 Van
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* =================================================
               BOOK RIDE
           ================================================= */}
 
@@ -1510,7 +1636,7 @@ export default function BookRideScreen() {
           </TouchableOpacity>
         </View>
       )}
-    </View>
+    </ScrollView>
   );
 }
 
@@ -1521,9 +1647,23 @@ export default function BookRideScreen() {
 const styles =
   StyleSheet.create({
     container: {
-      flex: 1,
+      flexGrow: 1,
       padding: 20,
+      paddingBottom: 50,
       backgroundColor: "#fff",
+    },
+
+    backButton: {
+      alignSelf: "flex-start",
+      paddingVertical: 8,
+      paddingHorizontal: 4,
+      marginBottom: 5,
+    },
+
+    backButtonText: {
+      color: "#007AFF",
+      fontSize: 16,
+      fontWeight: "600",
     },
 
     title: {
@@ -1606,6 +1746,39 @@ const styles =
       fontSize: 12,
       color: "#777",
       marginBottom: 10,
+    },
+
+    vehicleTypeContainer: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      justifyContent: "space-between",
+      marginBottom: 10,
+    },
+
+    vehicleTypeButton: {
+      width: "48%",
+      borderWidth: 1,
+      borderColor: "#ccc",
+      borderRadius: 8,
+      paddingVertical: 14,
+      alignItems: "center",
+      marginBottom: 10,
+      backgroundColor: "#fff",
+    },
+
+    selectedVehicleTypeButton: {
+      backgroundColor: "#007AFF",
+      borderColor: "#007AFF",
+    },
+
+    vehicleTypeText: {
+      fontSize: 16,
+      fontWeight: "600",
+      color: "#333",
+    },
+
+    selectedVehicleTypeText: {
+      color: "#fff",
     },
 
     bookButton: {
