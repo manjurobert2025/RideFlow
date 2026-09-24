@@ -1,5 +1,6 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
 import {
   Alert,
   SafeAreaView,
@@ -8,416 +9,1213 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import RazorpayCheckout from "react-native-razorpay";
-import api from "../../services/api";
-export default function Payment() {
-  const router = useRouter();
 
-  const { rideId, amount } = useLocalSearchParams<{
-    rideId?: string;
-    amount?: string;
-  }>();
 
-  const [loading, setLoading] = useState(false);
+import {
+  doc,
+  serverTimestamp,
+  updateDoc,
+} from "firebase/firestore";
 
-  const displayAmount = amount || "250";
+import { db } from "../../services/firebase";
 
-  const handlePayNow = async () => {
-  try {
-    if (!rideId) {
-      Alert.alert("Error", "Ride ID is missing.");
+// ==================================================
+// RAZORPAY WEB CHECKOUT TYPES
+// ==================================================
+
+declare global {
+  interface Window {
+    Razorpay?: any;
+  }
+}
+
+// ==================================================
+// LOAD RAZORPAY CHECKOUT.JS
+// ==================================================
+
+const loadRazorpayScript = (): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    if (typeof window === "undefined") {
+      reject(
+        new Error(
+          "Razorpay Web Checkout is available only in the web app."
+        )
+      );
       return;
     }
 
-    setLoading(true);
-
-    // 1. Create Razorpay order
-    const response = await fetch(
-  `${api}/api/Payment/create-order`,
-  {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      rideId: rideId,
-    }),
-  }
-);
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(
-        data?.message || "Unable to create payment order."
-      );
+    if (window.Razorpay) {
+      resolve();
+      return;
     }
 
-    console.log("Payment order created:", data);
-
-    // 2. Open Razorpay Checkout
-    const options = {
-      key: data.keyId,
-      amount: data.amount,
-      currency: data.currency || "INR",
-      name: "Ride App",
-      description: "Ride Payment",
-      order_id: data.orderId,
-
-      prefill: {
-        name: "Rider",
-      },
-
-      theme: {
-        color: "#2563EB",
-      },
-    };
-
-    const paymentData = await RazorpayCheckout.open(options);
-
-    console.log("Razorpay success:", paymentData);
-
-    // 3. Verify payment with backend
-    const verifyResponse = await fetch(
-      "`${api}/api/Payment/verify",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          paymentId: data.paymentId,
-          razorpayOrderId: paymentData.razorpay_order_id,
-          razorpayPaymentId: paymentData.razorpay_payment_id,
-          razorpaySignature: paymentData.razorpay_signature,
-        }),
-      }
+    const existingScript = document.querySelector(
+      'script[src="https://checkout.razorpay.com/v1/checkout.js"]'
     );
 
-    const verifyData = await verifyResponse.json();
-
-    console.log("Payment verification:", verifyData);
-
-    if (!verifyResponse.ok) {
-      throw new Error(
-        verifyData?.message || "Payment verification failed."
+    if (existingScript) {
+      existingScript.addEventListener("load", () => resolve());
+      existingScript.addEventListener("error", () =>
+        reject(
+          new Error(
+            "Unable to load Razorpay Checkout."
+          )
+        )
       );
+      return;
     }
 
-    // 4. Payment is genuinely verified
-    router.replace({
-      pathname: "/paymentsuccess" as any,
-      params: {
-        rideId: rideId,
-        paymentId: data.paymentId,
-        razorpayPaymentId: paymentData.razorpay_payment_id,
-      },
-    });
+    const script = document.createElement("script");
 
-  } catch (error: any) {
-    console.error("Payment error:", error);
+    script.src =
+      "https://checkout.razorpay.com/v1/checkout.js";
 
-    Alert.alert(
-      "Payment Failed",
-      error?.description ||
-        error?.message ||
-        "Payment was cancelled or failed."
-    );
-  } finally {
-    setLoading(false);
-  }
+    script.async = true;
+
+    script.onload = () => resolve();
+
+    script.onerror = () =>
+      reject(
+        new Error(
+          "Unable to load Razorpay Checkout."
+        )
+      );
+
+    document.body.appendChild(script);
+  });
 };
+
+// ==================================================
+// CLOUDFLARE WORKER URL
+// ==================================================
+
+const CLOUDFLARE_WORKER_URL =
+  "https://odd-art-cad0.manjurobert.workers.dev";
+
+// ==================================================
+// PAYMENT SCREEN
+// ==================================================
+
+export default function Payment() {
+  const router = useRouter();
+
+  const { rideId, amount } =
+    useLocalSearchParams<{
+      rideId?: string;
+      amount?: string;
+    }>();
+
+  const [loading, setLoading] =
+    useState(false);
+
+  // ==================================================
+  // LOAD RAZORPAY CHECKOUT.JS
+  // ==================================================
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      loadRazorpayScript().catch((error) => {
+        console.log(
+          "Razorpay script load error:",
+          error?.message
+        );
+      });
+    }
+  }, []);
+
+  // ==================================================
+  // DISPLAY AMOUNT
+  // ==================================================
+
+  const displayAmount =
+    amount || "250";
+
+  // ==================================================
+  // PAY NOW
+  // ==================================================
+
+  const handlePayNow = async () => {
+    try {
+      // ----------------------------------------------
+      // CHECK RIDE ID
+      // ----------------------------------------------
+
+      if (!rideId) {
+        Alert.alert(
+          "Error",
+          "Ride ID is missing."
+        );
+
+        return;
+      }
+
+      // ----------------------------------------------
+      // CHECK AMOUNT
+      // ----------------------------------------------
+
+      const numericAmount =
+        Number(displayAmount);
+
+      if (
+        !numericAmount ||
+        numericAmount <= 0
+      ) {
+        Alert.alert(
+          "Payment Error",
+          "Invalid ride amount."
+        );
+
+        return;
+      }
+
+      setLoading(true);
+
+      console.log(
+        "================================="
+      );
+
+      console.log(
+        "PAYMENT STARTED"
+      );
+
+      console.log(
+        "Ride ID:",
+        rideId
+      );
+
+      console.log(
+        "Ride Amount:",
+        numericAmount
+      );
+
+      console.log(
+        "================================="
+      );
+
+      // ==================================================
+      // 1. CREATE RAZORPAY ORDER
+      // ==================================================
+
+      console.log(
+        "Creating Razorpay order..."
+      );
+
+      const orderResponse =
+        await fetch(
+          `${CLOUDFLARE_WORKER_URL}/create-order`,
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+
+            body: JSON.stringify({
+              amount:
+                numericAmount,
+
+              receipt:
+                `ride_${rideId}`,
+            }),
+          }
+        );
+
+      console.log(
+        "Create order HTTP status:",
+        orderResponse.status
+      );
+
+      const orderText =
+        await orderResponse.text();
+
+      console.log(
+        "Create order response:",
+        orderText
+      );
+
+      let orderData: any;
+
+      try {
+        orderData =
+          JSON.parse(orderText);
+      } catch {
+        throw new Error(
+          "Invalid response from payment server."
+        );
+      }
+
+      // ----------------------------------------------
+      // CHECK HTTP RESPONSE
+      // ----------------------------------------------
+
+      if (!orderResponse.ok) {
+        throw new Error(
+          orderData?.message ||
+            "Unable to create payment order."
+        );
+      }
+
+      // ----------------------------------------------
+      // CHECK SUCCESS
+      // ----------------------------------------------
+
+      if (
+        !orderData ||
+        !orderData.success
+      ) {
+        throw new Error(
+          orderData?.message ||
+            "Razorpay order was not created."
+        );
+      }
+
+      // ----------------------------------------------
+      // CHECK ORDER ID
+      // ----------------------------------------------
+
+      if (
+        !orderData.orderId
+      ) {
+        throw new Error(
+          "Razorpay order ID was not returned by the server."
+        );
+      }
+
+      // ----------------------------------------------
+      // CHECK KEY ID
+      // ----------------------------------------------
+
+      if (
+        !orderData.keyId
+      ) {
+        throw new Error(
+          "Razorpay Key ID was not returned by the server."
+        );
+      }
+
+      console.log(
+        "Razorpay Order ID:",
+        orderData.orderId
+      );
+
+      console.log(
+        "Razorpay Amount:",
+        orderData.amount
+      );
+
+      console.log(
+        "Razorpay Currency:",
+        orderData.currency
+      );
+
+      // ==================================================
+      // 2. OPEN RAZORPAY CHECKOUT
+      // ==================================================
+
+      console.log(
+        "Opening Razorpay Checkout..."
+      );
+
+      const options = {
+        key:
+          orderData.keyId,
+
+        amount:
+          orderData.amount,
+
+        currency:
+          orderData.currency ||
+          "INR",
+
+        name:
+          "Ride App",
+
+        description:
+          "Ride Payment",
+
+        order_id:
+          orderData.orderId,
+
+        prefill: {},
+
+        theme: {
+          color:
+            "#2563EB",
+        },
+      };
+
+      console.log(
+        "Razorpay checkout options prepared."
+      );
+
+      // ==================================================
+      // OPEN RAZORPAY WEB CHECKOUT
+      // ==================================================
+
+      await loadRazorpayScript();
+
+      if (
+        typeof window === "undefined" ||
+        !window.Razorpay
+      ) {
+        throw new Error(
+          "Razorpay Checkout could not be loaded."
+        );
+      }
+
+      const paymentData: any =
+        await new Promise(
+          (
+            resolve,
+            reject
+          ) => {
+            try {
+              const razorpay =
+                new window.Razorpay(
+                  {
+                    ...options,
+
+                    handler:
+                      (
+                        response: any
+                      ) => {
+                        resolve(
+                          response
+                        );
+                      },
+                  }
+                );
+
+              razorpay.on(
+                "payment.failed",
+                (
+                  response: any
+                ) => {
+                  const description =
+                    response?.error
+                      ?.description ||
+                    "Razorpay payment failed.";
+
+                  reject(
+                    new Error(
+                      description
+                    )
+                  );
+                }
+              );
+
+              razorpay.open();
+
+            } catch (
+              error
+            ) {
+              reject(error);
+            }
+          }
+        );
+
+      console.log(
+        "================================="
+      );
+
+      console.log(
+        "RAZORPAY PAYMENT SUCCESS"
+      );
+
+      console.log(
+        "Payment response:",
+        paymentData
+      );
+
+      console.log(
+        "================================="
+      );
+
+      // ==================================================
+      // 3. CHECK RAZORPAY RESPONSE
+      // ==================================================
+
+      if (
+        !paymentData ||
+        !paymentData.razorpay_payment_id
+      ) {
+        throw new Error(
+          "Razorpay payment ID was not returned."
+        );
+      }
+
+      if (
+        !paymentData.razorpay_order_id
+      ) {
+        throw new Error(
+          "Razorpay order ID was not returned."
+        );
+      }
+
+      if (
+        !paymentData.razorpay_signature
+      ) {
+        throw new Error(
+          "Razorpay payment signature was not returned."
+        );
+      }
+
+      // ==================================================
+      // 4. VERIFY PAYMENT WITH CLOUDFLARE
+      // ==================================================
+
+      console.log(
+        "================================="
+      );
+
+      console.log(
+        "VERIFYING PAYMENT"
+      );
+
+      console.log(
+        "================================="
+      );
+
+      const verifyResponse =
+        await fetch(
+          `${CLOUDFLARE_WORKER_URL}/verify-payment`,
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+
+            body: JSON.stringify({
+              razorpayOrderId:
+                paymentData.razorpay_order_id,
+
+              razorpayPaymentId:
+                paymentData.razorpay_payment_id,
+
+              razorpaySignature:
+                paymentData.razorpay_signature,
+
+              expectedAmount:
+                numericAmount,
+            }),
+          }
+        );
+
+      console.log(
+        "Verify HTTP status:",
+        verifyResponse.status
+      );
+
+      const verifyText =
+        await verifyResponse.text();
+
+      console.log(
+        "Verify response:",
+        verifyText
+      );
+
+      let verifyData: any;
+
+      try {
+        verifyData =
+          JSON.parse(verifyText);
+      } catch {
+        throw new Error(
+          "Invalid verification response from payment server."
+        );
+      }
+
+      // ----------------------------------------------
+      // CHECK HTTP RESPONSE
+      // ----------------------------------------------
+
+      if (
+        !verifyResponse.ok
+      ) {
+        throw new Error(
+          verifyData?.message ||
+            "Payment verification failed."
+        );
+      }
+
+      // ----------------------------------------------
+      // CHECK VERIFICATION RESULT
+      // ----------------------------------------------
+
+      if (
+        !verifyData ||
+        !verifyData.success ||
+        !verifyData.verified
+      ) {
+        throw new Error(
+          verifyData?.message ||
+            "Payment could not be verified."
+        );
+      }
+
+      console.log(
+        "================================="
+      );
+
+      console.log(
+        "PAYMENT VERIFIED SUCCESSFULLY"
+      );
+
+      console.log(
+        "Razorpay Payment ID:",
+        paymentData.razorpay_payment_id
+      );
+
+      console.log(
+        "Razorpay Order ID:",
+        paymentData.razorpay_order_id
+      );
+
+      console.log(
+        "================================="
+      );
+
+      // ==================================================
+      // 5. UPDATE FIRESTORE RIDE
+      // ==================================================
+
+      console.log(
+        "Updating Firestore ride..."
+      );
+
+      const rideRef =
+        doc(
+          db,
+          "rides",
+          rideId
+        );
+
+      await updateDoc(
+        rideRef,
+        {
+          paymentStatus:
+            "paid",
+
+          paymentId:
+            paymentData.razorpay_payment_id,
+
+          razorpayOrderId:
+            paymentData.razorpay_order_id,
+
+          razorpayPaymentId:
+            paymentData.razorpay_payment_id,
+
+          paymentVerifiedAt:
+            serverTimestamp(),
+        }
+      );
+
+      console.log(
+        "Firestore ride updated successfully."
+      );
+
+      // ==================================================
+      // 6. GO TO PAYMENT SUCCESS SCREEN
+      // ==================================================
+
+      router.replace({
+        pathname:
+          "/paymentsuccess" as any,
+
+        params: {
+          rideId:
+            rideId,
+
+          paymentId:
+            paymentData.razorpay_payment_id,
+
+          razorpayPaymentId:
+            paymentData.razorpay_payment_id,
+        },
+      });
+
+    } catch (error: any) {
+      const errorMessage =
+        error?.description ||
+        error?.message ||
+        "Payment was cancelled or failed.";
+
+      console.log(
+        "PAYMENT ERROR:",
+        errorMessage
+      );
+
+      Alert.alert(
+        "Payment Failed",
+        errorMessage
+      );
+
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ==================================================
+  // UI
+  // ==================================================
+
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Payment</Text>
+    <SafeAreaView
+      style={styles.container}
+    >
+
+      {/* HEADER */}
+
+      <View
+        style={styles.header}
+      >
+
+        <Text
+          style={styles.headerTitle}
+        >
+          Payment
+        </Text>
+
       </View>
 
-      <View style={styles.content}>
-        {/* Amount Card */}
-        <View style={styles.amountCard}>
-          <Text style={styles.amountLabel}>Ride Fare</Text>
+      <View
+        style={styles.content}
+      >
 
-          <Text style={styles.amount}>
+        {/* AMOUNT CARD */}
+
+        <View
+          style={styles.amountCard}
+        >
+
+          <Text
+            style={styles.amountLabel}
+          >
+            Ride Fare
+          </Text>
+
+          <Text
+            style={styles.amount}
+          >
             ₹{displayAmount}
           </Text>
 
-          <Text style={styles.amountDescription}>
-            Amount payable for your completed ride
+          <Text
+            style={
+              styles.amountDescription
+            }
+          >
+            Amount payable for your
+            completed ride
           </Text>
+
         </View>
 
-        {/* Ride Details */}
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>
+        {/* RIDE DETAILS */}
+
+        <View
+          style={styles.card}
+        >
+
+          <Text
+            style={styles.sectionTitle}
+          >
             Ride Details
           </Text>
 
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Ride ID</Text>
+          <View
+            style={styles.infoRow}
+          >
 
-            <Text style={styles.value}>
-              {rideId || "Not available"}
+            <Text
+              style={styles.label}
+            >
+              Ride ID
             </Text>
+
+            <Text
+              style={styles.value}
+            >
+              {rideId ||
+                "Not available"}
+            </Text>
+
           </View>
 
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Ride Fare</Text>
+          <View
+            style={styles.infoRow}
+          >
 
-            <Text style={styles.value}>
+            <Text
+              style={styles.label}
+            >
+              Ride Fare
+            </Text>
+
+            <Text
+              style={styles.value}
+            >
               ₹{displayAmount}
             </Text>
+
           </View>
 
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Currency</Text>
+          <View
+            style={styles.infoRow}
+          >
 
-            <Text style={styles.value}>
+            <Text
+              style={styles.label}
+            >
+              Currency
+            </Text>
+
+            <Text
+              style={styles.value}
+            >
               INR
             </Text>
+
           </View>
+
         </View>
 
-        {/* Payment Method */}
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>
+        {/* PAYMENT METHOD */}
+
+        <View
+          style={styles.card}
+        >
+
+          <Text
+            style={styles.sectionTitle}
+          >
             Payment Method
           </Text>
 
-          <View style={styles.paymentMethod}>
-            <View style={styles.paymentIcon}>
-              <Text style={styles.paymentIconText}>₹</Text>
+          <View
+            style={styles.paymentMethod}
+          >
+
+            <View
+              style={styles.paymentIcon}
+            >
+
+              <Text
+                style={
+                  styles.paymentIconText
+                }
+              >
+                ₹
+              </Text>
+
             </View>
 
-            <View style={styles.paymentInfo}>
-              <Text style={styles.paymentTitle}>
+            <View
+              style={styles.paymentInfo}
+            >
+
+              <Text
+                style={styles.paymentTitle}
+              >
                 Online Payment
               </Text>
 
-              <Text style={styles.paymentDescription}>
-                Secure payment through Razorpay
+              <Text
+                style={
+                  styles.paymentDescription
+                }
+              >
+                Secure payment through
+                Razorpay
               </Text>
+
             </View>
 
-            <View style={styles.selected}>
-              <Text style={styles.selectedText}>✓</Text>
+            <View
+              style={styles.selected}
+            >
+
+              <Text
+                style={styles.selectedText}
+              >
+                ✓
+              </Text>
+
             </View>
+
           </View>
+
         </View>
 
-        {/* Security */}
-        <View style={styles.securityCard}>
-          <Text style={styles.lock}>🔒</Text>
+        {/* SECURITY */}
 
-          <Text style={styles.securityText}>
-            Your payment is securely processed.
-            We do not store your card details.
+        <View
+          style={styles.securityCard}
+        >
+
+          <Text
+            style={styles.lock}
+          >
+            🔒
           </Text>
+
+          <Text
+            style={styles.securityText}
+          >
+            Your payment is securely
+            processed. We do not store
+            your card details.
+          </Text>
+
         </View>
+
       </View>
 
-      {/* Pay Button */}
-      <View style={styles.bottomContainer}>
+      {/* PAY BUTTON */}
+
+      <View
+        style={styles.bottomContainer}
+      >
+
         <TouchableOpacity
           style={[
             styles.payButton,
-            loading && styles.disabledButton,
+            loading &&
+              styles.disabledButton,
           ]}
           onPress={handlePayNow}
           disabled={loading}
+          activeOpacity={0.8}
         >
-          <Text style={styles.payButtonText}>
+
+          <Text
+            style={styles.payButtonText}
+          >
             {loading
               ? "Processing..."
               : `Pay ₹${displayAmount}`}
           </Text>
+
         </TouchableOpacity>
+
       </View>
+
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#F7F8FA",
-  },
+// ==================================================
+// STYLES
+// ==================================================
 
-  header: {
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 20,
-    paddingVertical: 18,
-    borderBottomWidth: 1,
-    borderBottomColor: "#E5E7EB",
-  },
+const styles =
+  StyleSheet.create({
 
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: "700",
-    color: "#111827",
-  },
+    container: {
+      flex: 1,
+      backgroundColor:
+        "#F7F8FA",
+    },
 
-  content: {
-    flex: 1,
-    padding: 20,
-  },
+    header: {
+      backgroundColor:
+        "#FFFFFF",
 
-  amountCard: {
-    backgroundColor: "#2563EB",
-    borderRadius: 18,
-    padding: 28,
-    alignItems: "center",
-  },
+      paddingHorizontal:
+        20,
 
-  amountLabel: {
-    color: "#DBEAFE",
-    fontSize: 15,
-  },
+      paddingVertical:
+        18,
 
-  amount: {
-    color: "#FFFFFF",
-    fontSize: 40,
-    fontWeight: "800",
-    marginTop: 8,
-  },
+      borderBottomWidth:
+        1,
 
-  amountDescription: {
-    color: "#DBEAFE",
-    fontSize: 13,
-    marginTop: 8,
-    textAlign: "center",
-  },
+      borderBottomColor:
+        "#E5E7EB",
+    },
 
-  card: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    padding: 20,
-    marginTop: 18,
-  },
+    headerTitle: {
+      fontSize: 22,
+      fontWeight: "700",
+      color: "#111827",
+    },
 
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#111827",
-    marginBottom: 16,
-  },
+    content: {
+      flex: 1,
+      padding: 20,
+    },
 
-  infoRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 11,
-    borderBottomWidth: 1,
-    borderBottomColor: "#F0F0F0",
-  },
+    amountCard: {
+      backgroundColor:
+        "#2563EB",
 
-  label: {
-    fontSize: 14,
-    color: "#6B7280",
-  },
+      borderRadius:
+        18,
 
-  value: {
-    fontSize: 14,
-    color: "#111827",
-    fontWeight: "600",
-    maxWidth: "60%",
-    textAlign: "right",
-  },
+      padding: 28,
 
-  paymentMethod: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
+      alignItems:
+        "center",
+    },
 
-  paymentIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "#EFF6FF",
-    justifyContent: "center",
-    alignItems: "center",
-  },
+    amountLabel: {
+      color:
+        "#DBEAFE",
 
-  paymentIconText: {
-    fontSize: 22,
-    fontWeight: "700",
-    color: "#2563EB",
-  },
+      fontSize: 15,
+    },
 
-  paymentInfo: {
-    flex: 1,
-    marginLeft: 14,
-  },
+    amount: {
+      color:
+        "#FFFFFF",
 
-  paymentTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#111827",
-  },
+      fontSize: 40,
 
-  paymentDescription: {
-    fontSize: 12,
-    color: "#6B7280",
-    marginTop: 3,
-  },
+      fontWeight:
+        "800",
 
-  selected: {
-    width: 25,
-    height: 25,
-    borderRadius: 13,
-    backgroundColor: "#2563EB",
-    justifyContent: "center",
-    alignItems: "center",
-  },
+      marginTop: 8,
+    },
 
-  selectedText: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: "700",
-  },
+    amountDescription: {
+      color:
+        "#DBEAFE",
 
-  securityCard: {
-    marginTop: 18,
-    padding: 15,
-    backgroundColor: "#ECFDF5",
-    borderRadius: 14,
-    flexDirection: "row",
-    alignItems: "center",
-  },
+      fontSize: 13,
 
-  lock: {
-    fontSize: 20,
-    marginRight: 10,
-  },
+      marginTop: 8,
 
-  securityText: {
-    flex: 1,
-    fontSize: 12,
-    color: "#065F46",
-    lineHeight: 18,
-  },
+      textAlign:
+        "center",
+    },
 
-  bottomContainer: {
-    backgroundColor: "#FFFFFF",
-    padding: 20,
-    borderTopWidth: 1,
-    borderTopColor: "#E5E7EB",
-  },
+    card: {
+      backgroundColor:
+        "#FFFFFF",
 
-  payButton: {
-    height: 54,
-    borderRadius: 12,
-    backgroundColor: "#2563EB",
-    justifyContent: "center",
-    alignItems: "center",
-  },
+      borderRadius:
+        16,
 
-  disabledButton: {
-    opacity: 0.6,
-  },
+      padding: 20,
 
-  payButtonText: {
-    color: "#FFFFFF",
-    fontSize: 17,
-    fontWeight: "700",
-  },
-});
+      marginTop: 18,
+    },
+
+    sectionTitle: {
+      fontSize: 18,
+
+      fontWeight:
+        "700",
+
+      color:
+        "#111827",
+
+      marginBottom:
+        16,
+    },
+
+    infoRow: {
+      flexDirection:
+        "row",
+
+      justifyContent:
+        "space-between",
+
+      paddingVertical:
+        11,
+
+      borderBottomWidth:
+        1,
+
+      borderBottomColor:
+        "#F0F0F0",
+    },
+
+    label: {
+      fontSize: 14,
+      color: "#6B7280",
+    },
+
+    value: {
+      fontSize: 14,
+
+      color:
+        "#111827",
+
+      fontWeight:
+        "600",
+
+      maxWidth:
+        "60%",
+
+      textAlign:
+        "right",
+    },
+
+    paymentMethod: {
+      flexDirection:
+        "row",
+
+      alignItems:
+        "center",
+    },
+
+    paymentIcon: {
+      width: 48,
+
+      height: 48,
+
+      borderRadius: 24,
+
+      backgroundColor:
+        "#EFF6FF",
+
+      justifyContent:
+        "center",
+
+      alignItems:
+        "center",
+    },
+
+    paymentIconText: {
+      fontSize: 22,
+
+      fontWeight:
+        "700",
+
+      color:
+        "#2563EB",
+    },
+
+    paymentInfo: {
+      flex: 1,
+
+      marginLeft: 14,
+    },
+
+    paymentTitle: {
+      fontSize: 16,
+
+      fontWeight:
+        "700",
+
+      color:
+        "#111827",
+    },
+
+    paymentDescription: {
+      fontSize: 12,
+
+      color:
+        "#6B7280",
+
+      marginTop: 3,
+    },
+
+    selected: {
+      width: 25,
+
+      height: 25,
+
+      borderRadius: 13,
+
+      backgroundColor:
+        "#2563EB",
+
+      justifyContent:
+        "center",
+
+      alignItems:
+        "center",
+    },
+
+    selectedText: {
+      color:
+        "#FFFFFF",
+
+      fontSize: 15,
+
+      fontWeight:
+        "700",
+    },
+
+    securityCard: {
+      marginTop: 18,
+
+      padding: 15,
+
+      backgroundColor:
+        "#ECFDF5",
+
+      borderRadius: 14,
+
+      flexDirection:
+        "row",
+
+      alignItems:
+        "center",
+    },
+
+    lock: {
+      fontSize: 20,
+
+      marginRight: 10,
+    },
+
+    securityText: {
+      flex: 1,
+
+      fontSize: 12,
+
+      color:
+        "#065F46",
+
+      lineHeight: 18,
+    },
+
+    bottomContainer: {
+      backgroundColor:
+        "#FFFFFF",
+
+      padding: 20,
+
+      borderTopWidth:
+        1,
+
+      borderTopColor:
+        "#E5E7EB",
+    },
+
+    payButton: {
+      height: 54,
+
+      borderRadius: 12,
+
+      backgroundColor:
+        "#2563EB",
+
+      justifyContent:
+        "center",
+
+      alignItems:
+        "center",
+    },
+
+    disabledButton: {
+      opacity: 0.6,
+    },
+
+    payButtonText: {
+      color:
+        "#FFFFFF",
+
+      fontSize: 17,
+
+      fontWeight:
+        "700",
+    },
+
+  });

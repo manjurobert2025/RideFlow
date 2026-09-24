@@ -1,9 +1,24 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
+import {
+  GoogleAuthProvider,
+  signInWithPopup,
+} from "firebase/auth";
+import {
+  collection,
+  doc,
+  getDocs,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+} from "firebase/firestore";
 import { useState } from "react";
+
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -12,11 +27,235 @@ import {
 } from "react-native";
 
 import { loginUser } from "../../../services/authService";
+import { auth, db } from "../../../services/firebase";
 
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+
+  // =====================================================
+  // FIND RIDER'S NEXT REQUIRED RIDE ACTION
+  // =====================================================
+
+  const findRideAfterLogin = async (
+    riderId: string
+  ) => {
+    try {
+      const ridesQuery = query(
+        collection(db, "rides"),
+        where(
+          "riderId",
+          "==",
+          riderId
+        )
+      );
+
+      const snapshot =
+        await getDocs(ridesQuery);
+
+      if (snapshot.empty) {
+        return null;
+      }
+
+      const rides = snapshot.docs
+        .map((rideDoc) => ({
+          id: rideDoc.id,
+          ...rideDoc.data(),
+        }))
+        .filter(
+          (ride: any) =>
+            ride.status ===
+              "requested" ||
+            ride.status ===
+              "accepted" ||
+            ride.status ===
+              "driverArrived" ||
+            ride.status ===
+              "inProgress" ||
+            ride.status ===
+              "completed"
+        );
+
+      // Most recent ride first.
+      rides.sort(
+        (a: any, b: any) => {
+          const aTime =
+            a.createdAt?.toMillis
+              ? a.createdAt.toMillis()
+              : 0;
+
+          const bTime =
+            b.createdAt?.toMillis
+              ? b.createdAt.toMillis()
+              : 0;
+
+          return bTime - aTime;
+        }
+      );
+
+      // ----------------------------------------------------
+      // 1. Active ride
+      // ----------------------------------------------------
+
+      const activeRide =
+        rides.find(
+          (ride: any) =>
+            ride.status ===
+              "requested" ||
+            ride.status ===
+              "accepted" ||
+            ride.status ===
+              "driverArrived" ||
+            ride.status ===
+              "inProgress"
+        );
+
+      if (activeRide) {
+        return activeRide;
+      }
+
+      // ----------------------------------------------------
+      // 2. Completed ride with payment pending
+      // ----------------------------------------------------
+
+      const pendingPaymentRide =
+        rides.find(
+          (ride: any) =>
+            ride.status ===
+              "completed" &&
+            ride.paymentStatus !==
+              "paid"
+        );
+
+      if (pendingPaymentRide) {
+        return pendingPaymentRide;
+      }
+
+      return null;
+    } catch (error) {
+      console.error(
+        "FIND RIDE AFTER LOGIN ERROR:",
+        error
+      );
+
+      return null;
+    }
+  };
+
+  const navigateAfterLogin = async (
+    userId: string
+  ) => {
+    const ride =
+      await findRideAfterLogin(
+        userId
+      );
+
+    if (!ride) {
+      router.replace(
+        "/bookride"
+      );
+
+      return;
+    }
+
+    console.log(
+      "RIDE FOUND AFTER LOGIN:",
+      ride.id
+    );
+
+    console.log(
+      "STATUS:",
+      ride.status
+    );
+
+    console.log(
+      "PAYMENT STATUS:",
+      ride.paymentStatus ||
+        "pending"
+    );
+
+    // ----------------------------------------------------
+    // Completed ride - payment pending
+    // ----------------------------------------------------
+
+    if (
+      ride.status ===
+        "completed" &&
+      ride.paymentStatus !==
+        "paid"
+    ) {
+      router.replace({
+        pathname:
+          "/payment",
+        params: {
+          rideId:
+            ride.id,
+          amount: String(
+            ride.fare ??
+            ride.amount ??
+            250
+          ),
+        },
+      });
+
+      return;
+    }
+
+    // ----------------------------------------------------
+    // Requested ride
+    // ----------------------------------------------------
+
+    if (
+      ride.status ===
+      "requested"
+    ) {
+      router.replace({
+        pathname:
+          "/bookride",
+        params: {
+          resumeRideId:
+            ride.id,
+        },
+      });
+
+      return;
+    }
+
+    // ----------------------------------------------------
+    // Driver accepted / arrived / ride started
+    // ----------------------------------------------------
+
+    if (
+      ride.status ===
+        "accepted" ||
+      ride.status ===
+        "driverArrived" ||
+      ride.status ===
+        "inProgress"
+    ) {
+      router.replace({
+        pathname:
+          "/rideprogress",
+        params: {
+          rideId:
+            ride.id,
+        },
+      });
+
+      return;
+    }
+
+    router.replace(
+      "/bookride"
+    );
+  };
+
+  // =====================================================
+  // EMAIL / PASSWORD LOGIN
+  // =====================================================
 
   const handleLogin = async () => {
     if (!email.trim()) {
@@ -49,7 +288,7 @@ export default function LoginScreen() {
       );
 
       console.log(
-        "✅ Firebase login successful:",
+        "Firebase login successful:",
         user.uid
       );
 
@@ -70,7 +309,8 @@ export default function LoginScreen() {
         "token"
       );
 
-      router.replace("/bookride");
+      await navigateAfterLogin(user.uid);
+
     } catch (error: any) {
       console.error(
         "Login error:",
@@ -110,23 +350,306 @@ export default function LoginScreen() {
           message =
             "Network error. Please check your internet connection.";
           break;
+
+        default:
+          message =
+            error?.message ||
+            message;
+          break;
       }
 
       Alert.alert(
         "Login Failed",
         message
       );
+
     } finally {
       setLoading(false);
     }
   };
 
+  // =====================================================
+  // GOOGLE SIGN-IN
+  // =====================================================
+
+  const handleGoogleSignIn = async () => {
+    console.log(
+      "================================"
+    );
+
+    console.log(
+      "GOOGLE SIGN-IN BUTTON PRESSED"
+    );
+
+    console.log(
+      "Platform:",
+      Platform.OS
+    );
+
+    console.log(
+      "================================"
+    );
+
+    // -----------------------------------------------------
+    // CURRENTLY WE ARE TESTING GOOGLE SIGN-IN ON WEB
+    // -----------------------------------------------------
+
+    if (Platform.OS !== "web") {
+      Alert.alert(
+        "Google Sign-In",
+        "Google Sign-In is currently configured for the Web version. Android Google Sign-In will be configured separately."
+      );
+
+      return;
+    }
+
+    try {
+      setGoogleLoading(true);
+
+      console.log(
+        "Creating Google provider..."
+      );
+
+      const provider =
+        new GoogleAuthProvider();
+
+      // -----------------------------------------------------
+      // OPEN GOOGLE SIGN-IN POPUP
+      // -----------------------------------------------------
+
+      console.log(
+        "Opening Google Sign-In popup..."
+      );
+
+      const result =
+        await signInWithPopup(
+          auth,
+          provider
+        );
+
+      // -----------------------------------------------------
+      // GOOGLE USER
+      // -----------------------------------------------------
+
+      const user = result.user;
+
+      console.log(
+        "================================"
+      );
+
+      console.log(
+        "GOOGLE SIGN-IN SUCCESS"
+      );
+
+      console.log(
+        "UID:",
+        user.uid
+      );
+
+      console.log(
+        "EMAIL:",
+        user.email
+      );
+
+      console.log(
+        "DISPLAY NAME:",
+        user.displayName
+      );
+
+      console.log(
+        "PHOTO:",
+        user.photoURL
+      );
+
+      console.log(
+        "================================"
+      );
+
+      // -----------------------------------------------------
+      // SAVE RIDER TO FIRESTORE
+      // -----------------------------------------------------
+
+      const riderRef = doc(
+        db,
+        "riders",
+        user.uid
+      );
+
+      await setDoc(
+        riderRef,
+        {
+          userId: user.uid,
+
+          fullName:
+            user.displayName ||
+            "Rider",
+
+          email:
+            user.email || "",
+
+          phoneNumber: "",
+
+          role: "Rider",
+
+          photoURL:
+            user.photoURL || "",
+
+          authProvider:
+            "google",
+
+          updatedAt:
+            serverTimestamp(),
+
+          createdAt:
+            serverTimestamp(),
+        },
+        {
+          merge: true,
+        }
+      );
+
+      console.log(
+        "Rider Firestore document saved:",
+        user.uid
+      );
+
+      // -----------------------------------------------------
+      // SAVE USER INFORMATION LOCALLY
+      // -----------------------------------------------------
+
+      await AsyncStorage.setItem(
+        "firebaseUid",
+        user.uid
+      );
+
+      if (user.email) {
+        await AsyncStorage.setItem(
+          "email",
+          user.email
+        );
+      }
+
+      if (user.displayName) {
+        await AsyncStorage.setItem(
+          "fullName",
+          user.displayName
+        );
+      }
+
+      // Remove old JWT
+      await AsyncStorage.removeItem(
+        "token"
+      );
+
+      console.log(
+        "Rider local storage updated."
+      );
+
+      // -----------------------------------------------------
+      // GO TO BOOK RIDE
+      // -----------------------------------------------------
+
+      await navigateAfterLogin(user.uid);
+
+    } catch (error: any) {
+      console.error(
+        "================================"
+      );
+
+      console.error(
+        "GOOGLE SIGN-IN ERROR"
+      );
+
+      console.error(
+        "ERROR CODE:",
+        error?.code
+      );
+
+      console.error(
+        "ERROR MESSAGE:",
+        error?.message
+      );
+
+      console.error(
+        "FULL ERROR:",
+        error
+      );
+
+      console.error(
+        "================================"
+      );
+
+      let message =
+        "Unable to sign in with Google.";
+
+      switch (error?.code) {
+        case "auth/popup-closed-by-user":
+          message =
+            "Google Sign-In was cancelled.";
+          break;
+
+        case "auth/popup-blocked":
+          message =
+            "The Google Sign-In popup was blocked by the browser. Please allow popups and try again.";
+          break;
+
+        case "auth/cancelled-popup-request":
+          message =
+            "Another Google Sign-In request is already in progress.";
+          break;
+
+        case "auth/account-exists-with-different-credential":
+          message =
+            "An account already exists with this email using a different sign-in method. Please use your existing login method.";
+          break;
+
+        case "auth/operation-not-allowed":
+          message =
+            "Google Sign-In is not enabled in Firebase Authentication.";
+          break;
+
+        case "auth/network-request-failed":
+          message =
+            "Network error. Please check your internet connection.";
+          break;
+
+        default:
+          message =
+            error?.message ||
+            message;
+          break;
+      }
+
+      Alert.alert(
+        "Google Sign-In",
+        message
+      );
+
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  // =====================================================
+  // UI
+  // =====================================================
+
   return (
     <View style={styles.container}>
+
       <View style={styles.card}>
+
+        {/* =================================================
+            ICON
+        ================================================= */}
+
         <Text style={styles.icon}>
           🚖
         </Text>
+
+        {/* =================================================
+            TITLE
+        ================================================= */}
 
         <Text style={styles.title}>
           Rider Login
@@ -136,24 +659,46 @@ export default function LoginScreen() {
           Login to book your ride
         </Text>
 
+        {/* =================================================
+            EMAIL
+        ================================================= */}
+
         <TextInput
           style={styles.input}
           placeholder="Email"
+          placeholderTextColor="#888"
           value={email}
           onChangeText={setEmail}
           keyboardType="email-address"
           autoCapitalize="none"
           autoCorrect={false}
+          editable={
+            !loading &&
+            !googleLoading
+          }
         />
+
+        {/* =================================================
+            PASSWORD
+        ================================================= */}
 
         <TextInput
           style={styles.input}
           placeholder="Password"
+          placeholderTextColor="#888"
           value={password}
           onChangeText={setPassword}
           secureTextEntry
           autoCapitalize="none"
+          editable={
+            !loading &&
+            !googleLoading
+          }
         />
+
+        {/* =================================================
+            FORGOT PASSWORD
+        ================================================= */}
 
         <Pressable
           onPress={() =>
@@ -161,11 +706,19 @@ export default function LoginScreen() {
               "/auth/forgot-password"
             )
           }
+          disabled={
+            loading ||
+            googleLoading
+          }
         >
           <Text style={styles.forgotText}>
             Forgot Password?
           </Text>
         </Pressable>
+
+        {/* =================================================
+            LOGIN BUTTON
+        ================================================= */}
 
         <Pressable
           style={[
@@ -174,12 +727,25 @@ export default function LoginScreen() {
               styles.disabledButton,
           ]}
           onPress={handleLogin}
-          disabled={loading}
+          disabled={
+            loading ||
+            googleLoading
+          }
         >
           {loading ? (
-            <ActivityIndicator
-              color="#ffffff"
-            />
+            <View style={styles.loadingRow}>
+
+              <ActivityIndicator
+                color="#ffffff"
+              />
+
+              <Text
+                style={styles.buttonText}
+              >
+                LOGGING IN...
+              </Text>
+
+            </View>
           ) : (
             <Text
               style={styles.buttonText}
@@ -189,8 +755,86 @@ export default function LoginScreen() {
           )}
         </Pressable>
 
+        {/* =================================================
+            OR
+        ================================================= */}
+
+        <View style={styles.orContainer}>
+
+          <View
+            style={styles.orLine}
+          />
+
+          <Text style={styles.orText}>
+            OR
+          </Text>
+
+          <View
+            style={styles.orLine}
+          />
+
+        </View>
+
+        {/* =================================================
+            GOOGLE SIGN-IN
+        ================================================= */}
+
+        <Pressable
+          style={[
+            styles.googleButton,
+            googleLoading &&
+              styles.disabledButton,
+          ]}
+          onPress={handleGoogleSignIn}
+          disabled={
+            loading ||
+            googleLoading
+          }
+        >
+          {googleLoading ? (
+            <View style={styles.loadingRow}>
+
+              <ActivityIndicator
+                color="#000000"
+              />
+
+              <Text
+                style={styles.googleButtonText}
+              >
+                SIGNING IN...
+              </Text>
+
+            </View>
+          ) : (
+            <View
+              style={styles.googleContent}
+            >
+
+              <Text
+                style={styles.googleIcon}
+              >
+                G
+              </Text>
+
+              <Text
+                style={styles.googleButtonText}
+              >
+                Continue with Google
+              </Text>
+
+            </View>
+          )}
+        </Pressable>
+
+        {/* =================================================
+            REGISTER
+        ================================================= */}
+
         <View style={styles.registerRow}>
-          <Text style={styles.registerText}>
+
+          <Text
+            style={styles.registerText}
+          >
             Don't have an account?
           </Text>
 
@@ -200,6 +844,10 @@ export default function LoginScreen() {
                 "/auth/register"
               )
             }
+            disabled={
+              loading ||
+              googleLoading
+            }
           >
             <Text
               style={styles.registerLink}
@@ -207,11 +855,17 @@ export default function LoginScreen() {
               Register
             </Text>
           </Pressable>
+
         </View>
+
       </View>
     </View>
   );
 }
+
+// =====================================================
+// STYLES
+// =====================================================
 
 const styles = StyleSheet.create({
   container: {
@@ -287,9 +941,65 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
 
+  loadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+
+  orContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginVertical: 20,
+  },
+
+  orLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "#E5E7EB",
+  },
+
+  orText: {
+    marginHorizontal: 12,
+    color: "#888888",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+
+  googleButton: {
+    width: "100%",
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    borderRadius: 10,
+    paddingVertical: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#ffffff",
+  },
+
+  googleContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  googleIcon: {
+    fontSize: 20,
+    fontWeight: "bold",
+    marginRight: 10,
+  },
+
+  googleButtonText: {
+    color: "#222222",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+
   registerRow: {
     flexDirection: "row",
     justifyContent: "center",
+    alignItems: "center",
     marginTop: 20,
     gap: 5,
   },

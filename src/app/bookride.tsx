@@ -1,10 +1,11 @@
 import * as Location from "expo-location";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 
 import {
   addDoc,
   collection,
   doc,
+  getDoc,
   getDocs,
   onSnapshot,
   query,
@@ -27,31 +28,62 @@ import {
 } from "react-native";
 
 import { auth, db } from "../../services/firebase";
+import RideMap from "../components/RideMap";
+
+// ============================================================
+// VEHICLE TYPE
+// ============================================================
+
+interface VehicleType {
+  id: string;
+  name: string;
+  code: string;
+  icon: string;
+  isActive: boolean;
+  baseFare: number;
+  perKmRate: number;
+  perMinuteRate: number;
+}
+
+// ============================================================
+// BOOK RIDE SCREEN
+// ============================================================
 
 export default function BookRideScreen() {
-  // =========================================================
-  // PICKUP LOCATION
-  // =========================================================
+  const { resumeRideId } =
+    useLocalSearchParams<{
+      resumeRideId?: string;
+    }>();
 
-  const [pickupLocation, setPickupLocation] = useState("");
+  // ==========================================================
+  // PICKUP LOCATION
+  // ==========================================================
+
+  const [pickupLocation, setPickupLocation] =
+    useState("");
+
   const [pickupLatitude, setPickupLatitude] =
     useState<number | null>(null);
+
   const [pickupLongitude, setPickupLongitude] =
     useState<number | null>(null);
 
-  // =========================================================
+  // ==========================================================
   // DROP LOCATION
-  // =========================================================
+  // ==========================================================
 
-  const [dropLocation, setDropLocation] = useState("");
+  const [dropLocation, setDropLocation] =
+    useState("");
+
   const [dropLatitude, setDropLatitude] =
     useState<number | null>(null);
+
   const [dropLongitude, setDropLongitude] =
     useState<number | null>(null);
 
-  // =========================================================
-  // STATES
-  // =========================================================
+  // ==========================================================
+  // GENERAL STATES
+  // ==========================================================
 
   const [gettingLocation, setGettingLocation] =
     useState(true);
@@ -62,12 +94,22 @@ export default function BookRideScreen() {
   const [booking, setBooking] =
     useState(false);
 
-  // =========================================================
-  // SELECTED VEHICLE TYPE
-  // =========================================================
+  // ==========================================================
+  // VEHICLE TYPES
+  // ==========================================================
+
+  const [vehicleTypes, setVehicleTypes] =
+    useState<VehicleType[]>([]);
 
   const [selectedVehicleType, setSelectedVehicleType] =
-    useState("Car");
+    useState<VehicleType | null>(null);
+
+  const [loadingVehicleTypes, setLoadingVehicleTypes] =
+    useState(true);
+
+  // ==========================================================
+  // RIDE STATES
+  // ==========================================================
 
   const [waitingForDriver, setWaitingForDriver] =
     useState(false);
@@ -75,9 +117,9 @@ export default function BookRideScreen() {
   const [rideId, setRideId] =
     useState<string | null>(null);
 
-  // =========================================================
+  // ==========================================================
   // FIRESTORE LISTENER
-  // =========================================================
+  // ==========================================================
 
   const unsubscribeRef =
     useRef<(() => void) | null>(null);
@@ -85,21 +127,502 @@ export default function BookRideScreen() {
   const navigatingRef =
     useRef(false);
 
-  // =========================================================
-  // GET CURRENT LOCATION WHEN SCREEN OPENS
-  // =========================================================
+  const resumedRideRef =
+    useRef<string | null>(null);
+
+  // ==========================================================
+  // MAP
+  // ==========================================================
+
+  const mapRef =
+    useRef<any>(null);
+
+  const defaultMapRegion = {
+    latitude: 8.5241,
+    longitude: 76.9366,
+    latitudeDelta: 0.08,
+    longitudeDelta: 0.08,
+  };
+
+  const fitMapToLocations = () => {
+    if (!mapRef.current) {
+      return;
+    }
+
+    const coordinates: {
+      latitude: number;
+      longitude: number;
+    }[] = [];
+
+    if (
+      pickupLatitude !== null &&
+      pickupLongitude !== null
+    ) {
+      coordinates.push({
+        latitude: pickupLatitude,
+        longitude: pickupLongitude,
+      });
+    }
+
+    if (
+      dropLatitude !== null &&
+      dropLongitude !== null
+    ) {
+      coordinates.push({
+        latitude: dropLatitude,
+        longitude: dropLongitude,
+      });
+    }
+
+    if (coordinates.length === 1) {
+      mapRef.current.animateToRegion?.(
+        {
+          latitude: coordinates[0].latitude,
+          longitude: coordinates[0].longitude,
+          latitudeDelta: 0.03,
+          longitudeDelta: 0.03,
+        },
+        500
+      );
+      return;
+    }
+
+    if (coordinates.length >= 2) {
+      mapRef.current.fitToCoordinates?.(
+        coordinates,
+        {
+          edgePadding: {
+            top: 60,
+            right: 40,
+            bottom: 60,
+            left: 40,
+          },
+          animated: true,
+        }
+      );
+    }
+  };
+
+  // ==========================================================
+  // SCREEN LOAD
+  // ==========================================================
 
   useEffect(() => {
     getCurrentLocation();
+    loadVehicleTypes();
 
     return () => {
       stopRideListener();
     };
   }, []);
 
-  // =========================================================
+  // ==========================================================
+  // LOAD VEHICLE TYPES FROM FIRESTORE
+  // ==========================================================
+
+  const loadVehicleTypes = async () => {
+    try {
+      setLoadingVehicleTypes(true);
+
+      console.log(
+        "LOADING VEHICLE TYPES FROM FIRESTORE..."
+      );
+
+      const vehicleTypesRef =
+        collection(db, "vehicleTypes");
+
+      const vehicleTypesQuery = query(
+        vehicleTypesRef,
+        where("isActive", "==", true)
+      );
+
+      const snapshot =
+        await getDocs(vehicleTypesQuery);
+
+      console.log(
+        "VEHICLE TYPE DOCUMENTS:",
+        snapshot.docs.length
+      );
+
+      const types: VehicleType[] =
+        snapshot.docs.map((vehicleDoc) => {
+          const data = vehicleDoc.data();
+
+          return {
+            id: vehicleDoc.id,
+            name: data.name || "",
+            code: data.code || "",
+            icon: data.icon || "",
+            isActive: data.isActive === true,
+
+            // Tariff settings from vehicleTypes collection
+            baseFare:
+              typeof data.baseFare === "number"
+                ? data.baseFare
+                : Number(data.baseFare || 0),
+
+            perKmRate:
+              typeof data.perKmRate === "number"
+                ? data.perKmRate
+                : Number(data.perKmRate || 0),
+
+            perMinuteRate:
+              typeof data.perMinuteRate === "number"
+                ? data.perMinuteRate
+                : Number(data.perMinuteRate || 0),
+          };
+        });
+
+      console.log(
+        "ACTIVE VEHICLE TYPES:",
+        types
+      );
+
+      setVehicleTypes(types);
+
+      if (types.length > 0) {
+        setSelectedVehicleType(types[0]);
+      }
+    } catch (error) {
+      console.error(
+        "ERROR LOADING VEHICLE TYPES:",
+        error
+      );
+
+      Alert.alert(
+        "Vehicle Types Error",
+        "Unable to load vehicle types."
+      );
+    } finally {
+      setLoadingVehicleTypes(false);
+    }
+  };
+
+  // ==========================================================
+  // RESUME EXISTING RIDE AFTER LOGIN
+  // ==========================================================
+
+  const resumeExistingRide = async (
+    existingRideId: string
+  ) => {
+    if (
+      resumedRideRef.current ===
+      existingRideId
+    ) {
+      return;
+    }
+
+    resumedRideRef.current =
+      existingRideId;
+
+    try {
+      console.log(
+        "RESUMING EXISTING RIDE:",
+        existingRideId
+      );
+
+      const rideRef = doc(
+        db,
+        "rides",
+        existingRideId
+      );
+
+      const rideSnapshot =
+        await getDoc(rideRef);
+
+      if (!rideSnapshot.exists()) {
+        resumedRideRef.current =
+          null;
+
+        Alert.alert(
+          "Ride Not Found",
+          "The existing ride could not be found."
+        );
+
+        return;
+      }
+
+      const ride =
+        rideSnapshot.data();
+
+      const currentUser =
+        auth.currentUser;
+
+      if (!currentUser) {
+        resumedRideRef.current =
+          null;
+
+        router.replace(
+          "/auth/login"
+        );
+
+        return;
+      }
+
+      if (
+        ride.riderId !==
+        currentUser.uid
+      ) {
+        resumedRideRef.current =
+          null;
+
+        Alert.alert(
+          "Ride Error",
+          "This ride does not belong to the current rider."
+        );
+
+        return;
+      }
+
+      const status =
+        ride.status;
+
+      const paymentStatus =
+        ride.paymentStatus ||
+        "pending";
+
+      console.log(
+        "RESUME RIDE STATUS:",
+        status
+      );
+
+      console.log(
+        "RESUME PAYMENT STATUS:",
+        paymentStatus
+      );
+
+      // ------------------------------------------------------
+      // Completed ride with payment pending
+      // ------------------------------------------------------
+
+      if (
+        status === "completed" &&
+        paymentStatus !== "paid"
+      ) {
+        console.log(
+          "COMPLETED RIDE HAS PENDING PAYMENT"
+        );
+
+        setRideId(null);
+        setWaitingForDriver(false);
+
+        resumedRideRef.current =
+          null;
+
+        router.replace({
+          pathname:
+            "/payment",
+          params: {
+            rideId:
+              existingRideId,
+            amount: String(
+              ride.fare ??
+              ride.amount ??
+              250
+            ),
+          },
+        });
+
+        return;
+      }
+
+      // ------------------------------------------------------
+      // Completed and already paid
+      // ------------------------------------------------------
+
+      if (
+        status === "completed" &&
+        paymentStatus === "paid"
+      ) {
+        console.log(
+          "RIDE COMPLETED AND PAYMENT ALREADY PAID"
+        );
+
+        setRideId(null);
+        setWaitingForDriver(false);
+
+        resumedRideRef.current =
+          null;
+
+        return;
+      }
+
+      // ------------------------------------------------------
+      // Active ride
+      // ------------------------------------------------------
+
+      if (
+        status === "accepted" ||
+        status === "driverArrived" ||
+        status === "inProgress"
+      ) {
+        resumedRideRef.current =
+          null;
+
+        router.replace({
+          pathname:
+            "/rideprogress",
+          params: {
+            rideId:
+              existingRideId,
+          },
+        });
+
+        return;
+      }
+
+      // ------------------------------------------------------
+      // Requested ride
+      // ------------------------------------------------------
+
+      if (
+        status !== "requested"
+      ) {
+        resumedRideRef.current =
+          null;
+
+        setRideId(null);
+        setWaitingForDriver(false);
+
+        return;
+      }
+
+      // ------------------------------------------------------
+      // Restore ride details
+      // ------------------------------------------------------
+
+      setRideId(
+        existingRideId
+      );
+
+      if (
+        typeof ride.pickupLocation ===
+        "string"
+      ) {
+        setPickupLocation(
+          ride.pickupLocation
+        );
+      }
+
+      if (
+        typeof ride.pickupLatitude ===
+        "number"
+      ) {
+        setPickupLatitude(
+          ride.pickupLatitude
+        );
+      }
+
+      if (
+        typeof ride.pickupLongitude ===
+        "number"
+      ) {
+        setPickupLongitude(
+          ride.pickupLongitude
+        );
+      }
+
+      if (
+        typeof ride.dropLocation ===
+        "string"
+      ) {
+        setDropLocation(
+          ride.dropLocation
+        );
+      }
+
+      if (
+        typeof ride.dropLatitude ===
+        "number"
+      ) {
+        setDropLatitude(
+          ride.dropLatitude
+        );
+      }
+
+      if (
+        typeof ride.dropLongitude ===
+        "number"
+      ) {
+        setDropLongitude(
+          ride.dropLongitude
+        );
+      }
+
+      if (
+        ride.vehicleTypeId
+      ) {
+        const matchingVehicle =
+          vehicleTypes.find(
+            (vehicle) =>
+              vehicle.id ===
+              ride.vehicleTypeId
+          );
+
+        if (matchingVehicle) {
+          setSelectedVehicleType(
+            matchingVehicle
+          );
+        } else {
+          setSelectedVehicleType({
+            id:
+              ride.vehicleTypeId,
+            name:
+              ride.vehicleType ||
+              "Vehicle",
+            code: "",
+            icon: "",
+            isActive: true,
+          });
+        }
+      }
+
+      setWaitingForDriver(
+        true
+      );
+
+      navigatingRef.current =
+        false;
+
+      listenToRide(
+        existingRideId
+      );
+    } catch (error) {
+      console.error(
+        "RESUME EXISTING RIDE ERROR:",
+        error
+      );
+
+      resumedRideRef.current =
+        null;
+
+      Alert.alert(
+        "Ride Resume Error",
+        "Unable to restore your existing ride."
+      );
+    }
+  };
+
+  useEffect(() => {
+    if (!resumeRideId) {
+      return;
+    }
+
+    if (loadingVehicleTypes) {
+      return;
+    }
+
+    resumeExistingRide(
+      resumeRideId
+    );
+  }, [
+    resumeRideId,
+    loadingVehicleTypes,
+  ]);
+
+  // ==========================================================
   // GET CURRENT GPS LOCATION
-  // =========================================================
+  // ==========================================================
 
   const getCurrentLocation = async () => {
     try {
@@ -145,9 +668,9 @@ export default function BookRideScreen() {
       setPickupLatitude(latitude);
       setPickupLongitude(longitude);
 
-      // -------------------------------------------------------
-      // Reverse geocode current location
-      // -------------------------------------------------------
+      // ======================================================
+      // REVERSE GEOCODE
+      // ======================================================
 
       try {
         const addresses =
@@ -162,7 +685,8 @@ export default function BookRideScreen() {
         );
 
         if (addresses.length > 0) {
-          const address = addresses[0];
+          const address =
+            addresses[0];
 
           const parts = [
             address.name,
@@ -178,15 +702,11 @@ export default function BookRideScreen() {
 
           setPickupLocation(
             formattedAddress ||
-              `${latitude.toFixed(
-                6
-              )}, ${longitude.toFixed(6)}`
+              `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`
           );
         } else {
           setPickupLocation(
-            `${latitude.toFixed(
-              6
-            )}, ${longitude.toFixed(6)}`
+            `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`
           );
         }
       } catch (error) {
@@ -196,9 +716,7 @@ export default function BookRideScreen() {
         );
 
         setPickupLocation(
-          `${latitude.toFixed(
-            6
-          )}, ${longitude.toFixed(6)}`
+          `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`
         );
       }
     } catch (error) {
@@ -216,9 +734,141 @@ export default function BookRideScreen() {
     }
   };
 
-  // =========================================================
+  // ==========================================================
+  // FIND PICKUP LOCATION
+  // ==========================================================
+
+  const findPickupLocation = async () => {
+    const searchText = pickupLocation.trim();
+
+    if (!searchText) {
+      Alert.alert(
+        "Enter Pickup Location",
+        "Please enter a place or address in the Pickup Location box."
+      );
+
+      return;
+    }
+
+    try {
+      setFindingLocation(true);
+
+      console.log(
+        "Searching for pickup location:",
+        searchText
+      );
+
+      const url =
+        "https://photon.komoot.io/api/?q=" +
+        encodeURIComponent(searchText) +
+        "&limit=5";
+
+      const response = await fetch(url);
+
+      console.log(
+        "PICKUP LOCATION SEARCH STATUS:",
+        response.status
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `Location search failed: ${response.status}`
+        );
+      }
+
+      const data = await response.json();
+
+      console.log(
+        "PICKUP LOCATION SEARCH RESULT:",
+        JSON.stringify(data)
+      );
+
+      if (
+        !data.features ||
+        data.features.length === 0
+      ) {
+        Alert.alert(
+          "Location Not Found",
+          `Could not find "${searchText}". Try entering a more specific place or address.`
+        );
+
+        return;
+      }
+
+      const result = data.features[0];
+
+      const coordinates =
+        result.geometry?.coordinates;
+
+      if (
+        !coordinates ||
+        coordinates.length < 2
+      ) {
+        Alert.alert(
+          "Location Error",
+          "The location was found, but coordinates were not available."
+        );
+
+        return;
+      }
+
+      const longitude = Number(coordinates[0]);
+      const latitude = Number(coordinates[1]);
+
+      console.log(
+        "PICKUP LATITUDE:",
+        latitude
+      );
+
+      console.log(
+        "PICKUP LONGITUDE:",
+        longitude
+      );
+
+      setPickupLatitude(latitude);
+      setPickupLongitude(longitude);
+
+      const properties =
+        result.properties || {};
+
+      const addressParts = [
+        properties.name,
+        properties.street,
+        properties.city,
+        properties.district,
+        properties.state,
+        properties.country,
+      ].filter(Boolean);
+
+      const foundAddress =
+        addressParts.join(", ");
+
+      if (foundAddress) {
+        setPickupLocation(foundAddress);
+      }
+
+      Alert.alert(
+        "Pickup Location Found",
+        foundAddress || searchText
+      );
+    } catch (error) {
+      console.log(
+        "FIND PICKUP LOCATION ERROR:",
+        error
+      );
+
+      Alert.alert(
+        "Location Error",
+        "Unable to search for this pickup location. Please check your internet connection."
+      );
+    } finally {
+      setFindingLocation(false);
+    }
+  };
+
+  // ==========================================================
   // FIND DROP LOCATION
-  // =========================================================
+  // ==========================================================
 
   const findDropLocation = async () => {
     const searchText =
@@ -240,10 +890,6 @@ export default function BookRideScreen() {
         "Searching for drop location:",
         searchText
       );
-
-      // -------------------------------------------------------
-      // Photon geocoding
-      // -------------------------------------------------------
 
       const url =
         "https://photon.komoot.io/api/?q=" +
@@ -289,10 +935,6 @@ export default function BookRideScreen() {
         return;
       }
 
-      // -------------------------------------------------------
-      // First result
-      // -------------------------------------------------------
-
       const result =
         data.features[0];
 
@@ -327,16 +969,8 @@ export default function BookRideScreen() {
         longitude
       );
 
-      // -------------------------------------------------------
-      // Save coordinates
-      // -------------------------------------------------------
-
       setDropLatitude(latitude);
       setDropLongitude(longitude);
-
-      // -------------------------------------------------------
-      // Create readable address
-      // -------------------------------------------------------
 
       const properties =
         result.properties || {};
@@ -378,9 +1012,9 @@ export default function BookRideScreen() {
     }
   };
 
-  // =========================================================
+  // ==========================================================
   // CALCULATE DISTANCE
-  // =========================================================
+  // ==========================================================
 
   const calculateDistanceKm = (
     lat1: number,
@@ -391,10 +1025,12 @@ export default function BookRideScreen() {
     const R = 6371;
 
     const dLat =
-      ((lat2 - lat1) * Math.PI) / 180;
+      ((lat2 - lat1) * Math.PI) /
+      180;
 
     const dLon =
-      ((lon2 - lon1) * Math.PI) / 180;
+      ((lon2 - lon1) * Math.PI) /
+      180;
 
     const a =
       Math.sin(dLat / 2) *
@@ -418,9 +1054,38 @@ export default function BookRideScreen() {
     return R * c;
   };
 
-  // =========================================================
+  // ==========================================================
+  // ESTIMATED FARE
+  // ==========================================================
+
+  const estimatedDistanceKm =
+    pickupLatitude !== null &&
+    pickupLongitude !== null &&
+    dropLatitude !== null &&
+    dropLongitude !== null
+      ? calculateDistanceKm(
+          pickupLatitude,
+          pickupLongitude,
+          dropLatitude,
+          dropLongitude
+        )
+      : null;
+
+  const estimatedFare =
+    selectedVehicleType &&
+    estimatedDistanceKm !== null
+      ? Math.round(
+          (
+            selectedVehicleType.baseFare +
+            estimatedDistanceKm *
+              selectedVehicleType.perKmRate
+          ) * 100
+        ) / 100
+      : null;
+
+  // ==========================================================
   // FIND NEAREST AVAILABLE DRIVER
-  // =========================================================
+  // ==========================================================
 
   const findNearestDriver = async (
     latitude: number,
@@ -428,7 +1093,7 @@ export default function BookRideScreen() {
   ) => {
     try {
       console.log(
-        "🔎 Finding nearest available driver..."
+        "Finding nearest available driver..."
       );
 
       const driversQuery =
@@ -450,13 +1115,13 @@ export default function BookRideScreen() {
         );
 
       console.log(
-        "🚗 Available drivers found:",
+        "Available drivers found:",
         snapshot.size
       );
 
       if (snapshot.empty) {
         console.log(
-          "❌ No available drivers."
+          "No available drivers."
         );
 
         return null;
@@ -473,10 +1138,6 @@ export default function BookRideScreen() {
           const driver =
             driverDoc.data();
 
-          // ---------------------------------------------------
-          // Ignore driver without GPS
-          // ---------------------------------------------------
-
           if (
             typeof driver.latitude !==
               "number" ||
@@ -484,7 +1145,7 @@ export default function BookRideScreen() {
               "number"
           ) {
             console.log(
-              "⚠️ Driver has no GPS location:",
+              "Driver has no GPS:",
               driverDoc.id
             );
 
@@ -500,7 +1161,7 @@ export default function BookRideScreen() {
             );
 
           console.log(
-            "🚗 Driver:",
+            "Driver:",
             driverDoc.id,
             "Distance:",
             distance.toFixed(2),
@@ -526,19 +1187,19 @@ export default function BookRideScreen() {
 
       if (!nearestDriver) {
         console.log(
-          "❌ No driver with valid GPS location."
+          "No driver with valid GPS location."
         );
 
         return null;
       }
 
       console.log(
-        "✅ NEAREST DRIVER:",
+        "NEAREST DRIVER:",
         nearestDriver.id
       );
 
       console.log(
-        "📏 DISTANCE:",
+        "DISTANCE:",
         nearestDriver.distanceKm.toFixed(
           2
         ),
@@ -548,7 +1209,7 @@ export default function BookRideScreen() {
       return nearestDriver;
     } catch (error) {
       console.error(
-        "❌ FIND NEAREST DRIVER ERROR:",
+        "FIND NEAREST DRIVER ERROR:",
         error
       );
 
@@ -556,16 +1217,16 @@ export default function BookRideScreen() {
     }
   };
 
-  // =========================================================
-  // CHECK WHETHER RIDER ALREADY HAS ACTIVE RIDE
-  // =========================================================
+  // ==========================================================
+  // CHECK ACTIVE RIDE
+  // ==========================================================
 
   const hasActiveRide = async (
     riderId: string
   ) => {
     try {
       console.log(
-        "🔎 Checking whether rider already has an active ride..."
+        "Checking active rides..."
       );
 
       const activeRideQuery =
@@ -597,14 +1258,14 @@ export default function BookRideScreen() {
         );
 
       console.log(
-        "🚕 Active rides found:",
+        "Active rides found:",
         snapshot.size
       );
 
       return !snapshot.empty;
     } catch (error) {
       console.error(
-        "❌ ACTIVE RIDE CHECK ERROR:",
+        "ACTIVE RIDE CHECK ERROR:",
         error
       );
 
@@ -612,14 +1273,14 @@ export default function BookRideScreen() {
     }
   };
 
-  // =========================================================
+  // ==========================================================
   // BOOK RIDE
-  // =========================================================
+  // ==========================================================
 
   const handleBookRide = async () => {
-    // -------------------------------------------------------
-    // Check pickup
-    // -------------------------------------------------------
+    // --------------------------------------------------------
+    // Pickup validation
+    // --------------------------------------------------------
 
     if (
       pickupLatitude === null ||
@@ -633,13 +1294,11 @@ export default function BookRideScreen() {
       return;
     }
 
-    // -------------------------------------------------------
-    // Check drop text
-    // -------------------------------------------------------
+    // --------------------------------------------------------
+    // Drop validation
+    // --------------------------------------------------------
 
-    if (
-      !dropLocation.trim()
-    ) {
+    if (!dropLocation.trim()) {
       Alert.alert(
         "Drop Location",
         "Please enter your destination."
@@ -648,25 +1307,34 @@ export default function BookRideScreen() {
       return;
     }
 
-    // -------------------------------------------------------
-    // Check whether Find was pressed
-    // -------------------------------------------------------
-
     if (
       dropLatitude === null ||
       dropLongitude === null
     ) {
       Alert.alert(
         "Find Location",
-        "Please press Find Location to find the destination before booking."
+        "Please press Find before booking."
       );
 
       return;
     }
 
-    // -------------------------------------------------------
+    // --------------------------------------------------------
+    // Vehicle validation
+    // --------------------------------------------------------
+
+    if (!selectedVehicleType) {
+      Alert.alert(
+        "Vehicle Type",
+        "Please select a vehicle type."
+      );
+
+      return;
+    }
+
+    // --------------------------------------------------------
     // Firebase authentication
-    // -------------------------------------------------------
+    // --------------------------------------------------------
 
     const currentUser =
       auth.currentUser;
@@ -698,10 +1366,9 @@ export default function BookRideScreen() {
         riderId
       );
 
-      // =====================================================
-      // IMPORTANT:
-      // Check existing active ride BEFORE creating another ride
-      // =====================================================
+      // ------------------------------------------------------
+      // Check existing active ride
+      // ------------------------------------------------------
 
       const alreadyHasRide =
         await hasActiveRide(
@@ -717,9 +1384,9 @@ export default function BookRideScreen() {
         return;
       }
 
-      // -------------------------------------------------------
-      // Find nearest available driver
-      // -------------------------------------------------------
+      // ------------------------------------------------------
+      // Find nearest driver
+      // ------------------------------------------------------
 
       const nearestDriver =
         await findNearestDriver(
@@ -732,9 +1399,9 @@ export default function BookRideScreen() {
         nearestDriver
       );
 
-      // -------------------------------------------------------
-      // Create ride document
-      // -------------------------------------------------------
+      // ------------------------------------------------------
+      // Ride data
+      // ------------------------------------------------------
 
       const rideData = {
         riderId:
@@ -743,8 +1410,34 @@ export default function BookRideScreen() {
         riderEmail:
           riderEmail,
 
+        // Vehicle master information
+        vehicleTypeId:
+          selectedVehicleType.id,
+
         vehicleType:
-          selectedVehicleType,
+          selectedVehicleType.name,
+
+        // Tariff information used for this ride
+        baseFare:
+          selectedVehicleType.baseFare,
+
+        perKmRate:
+          selectedVehicleType.perKmRate,
+
+        perMinuteRate:
+          selectedVehicleType.perMinuteRate,
+
+        estimatedDistanceKm:
+          estimatedDistanceKm !== null
+            ? Number(
+                estimatedDistanceKm.toFixed(2)
+              )
+            : null,
+
+        estimatedFare:
+          estimatedFare !== null
+            ? estimatedFare
+            : null,
 
         pickupLocation:
           pickupLocation.trim(),
@@ -764,10 +1457,7 @@ export default function BookRideScreen() {
         dropLongitude:
           dropLongitude,
 
-        // ---------------------------------------------------
-        // Nearest available driver
-        // ---------------------------------------------------
-
+        // Driver
         driverId:
           nearestDriver?.id ||
           null,
@@ -782,10 +1472,7 @@ export default function BookRideScreen() {
         driverLongitude:
           null,
 
-        // ---------------------------------------------------
-        // Initial status
-        // ---------------------------------------------------
-
+        // Ride status
         status:
           "requested",
 
@@ -800,6 +1487,22 @@ export default function BookRideScreen() {
 
         completedAt:
           null,
+
+        // Payment
+        paymentStatus:
+          "pending",
+
+        paymentId:
+          null,
+
+        razorpayOrderId:
+          null,
+
+        razorpayPaymentId:
+          null,
+
+        paymentVerifiedAt:
+          null,
       };
 
       console.log(
@@ -807,9 +1510,9 @@ export default function BookRideScreen() {
         rideData
       );
 
-      // -------------------------------------------------------
-      // Create Firestore ride
-      // -------------------------------------------------------
+      // ------------------------------------------------------
+      // Create ride
+      // ------------------------------------------------------
 
       const rideRef =
         await addDoc(
@@ -830,12 +1533,12 @@ export default function BookRideScreen() {
 
       if (nearestDriver) {
         console.log(
-          "🚕 RIDE ASSIGNED TO NEAREST DRIVER:",
+          "RIDE ASSIGNED TO DRIVER:",
           nearestDriver.id
         );
 
         console.log(
-          "📏 DRIVER DISTANCE:",
+          "DRIVER DISTANCE:",
           nearestDriver.distanceKm.toFixed(
             2
           ),
@@ -843,13 +1546,13 @@ export default function BookRideScreen() {
         );
       } else {
         console.log(
-          "⚠️ RIDE CREATED WITHOUT DRIVER ASSIGNMENT."
+          "RIDE CREATED WITHOUT DRIVER."
         );
       }
 
-      // -------------------------------------------------------
+      // ------------------------------------------------------
       // Update UI
-      // -------------------------------------------------------
+      // ------------------------------------------------------
 
       setRideId(
         newRideId
@@ -862,9 +1565,9 @@ export default function BookRideScreen() {
       navigatingRef.current =
         false;
 
-      // -------------------------------------------------------
-      // Start real-time listener
-      // -------------------------------------------------------
+      // ------------------------------------------------------
+      // Listen for ride updates
+      // ------------------------------------------------------
 
       listenToRide(
         newRideId
@@ -874,10 +1577,6 @@ export default function BookRideScreen() {
         "CREATE RIDE ERROR:",
         error
       );
-
-      // -------------------------------------------------------
-      // Firestore index error
-      // -------------------------------------------------------
 
       if (
         error?.message?.includes(
@@ -899,9 +1598,9 @@ export default function BookRideScreen() {
     }
   };
 
-  // =========================================================
-  // LISTEN TO FIRESTORE RIDE
-  // =========================================================
+  // ==========================================================
+  // LISTEN TO RIDE
+  // ==========================================================
 
   const listenToRide = (
     currentRideId: string
@@ -948,17 +1647,16 @@ export default function BookRideScreen() {
             status
           );
 
-          // ===================================================
+          // ==================================================
           // DRIVER ACCEPTED
-          // ===================================================
+          // ==================================================
 
           if (
-            status ===
-              "accepted" &&
+            status === "accepted" &&
             !navigatingRef.current
           ) {
             console.log(
-              "🚗 DRIVER ACCEPTED RIDE"
+              "DRIVER ACCEPTED RIDE"
             );
 
             navigatingRef.current =
@@ -982,9 +1680,9 @@ export default function BookRideScreen() {
             return;
           }
 
-          // ===================================================
+          // ==================================================
           // DRIVER ARRIVED
-          // ===================================================
+          // ==================================================
 
           if (
             status ===
@@ -992,7 +1690,7 @@ export default function BookRideScreen() {
             !navigatingRef.current
           ) {
             console.log(
-              "📍 DRIVER ARRIVED"
+              "DRIVER ARRIVED"
             );
 
             navigatingRef.current =
@@ -1016,17 +1714,16 @@ export default function BookRideScreen() {
             return;
           }
 
-          // ===================================================
+          // ==================================================
           // RIDE STARTED
-          // ===================================================
+          // ==================================================
 
           if (
-            status ===
-              "inProgress" &&
+            status === "inProgress" &&
             !navigatingRef.current
           ) {
             console.log(
-              "▶ RIDE STARTED"
+              "RIDE STARTED"
             );
 
             navigatingRef.current =
@@ -1050,15 +1747,13 @@ export default function BookRideScreen() {
             return;
           }
 
-          // ===================================================
+          // ==================================================
           // RIDE CANCELLED
-          // ===================================================
+          // ==================================================
 
           if (
-            status ===
-              "cancelled" ||
-            status ===
-              "canceled"
+            status === "cancelled" ||
+            status === "canceled"
           ) {
             console.log(
               "RIDE CANCELLED"
@@ -1070,9 +1765,7 @@ export default function BookRideScreen() {
               false
             );
 
-            setRideId(
-              null
-            );
+            setRideId(null);
 
             navigatingRef.current =
               false;
@@ -1085,13 +1778,12 @@ export default function BookRideScreen() {
             return;
           }
 
-          // ===================================================
+          // ==================================================
           // RIDE COMPLETED
-          // ===================================================
+          // ==================================================
 
           if (
-            status ===
-            "completed"
+            status === "completed"
           ) {
             console.log(
               "RIDE COMPLETED"
@@ -1103,9 +1795,7 @@ export default function BookRideScreen() {
               false
             );
 
-            setRideId(
-              null
-            );
+            setRideId(null);
 
             navigatingRef.current =
               false;
@@ -1130,9 +1820,9 @@ export default function BookRideScreen() {
       unsubscribe;
   };
 
-  // =========================================================
-  // STOP FIRESTORE LISTENER
-  // =========================================================
+  // ==========================================================
+  // STOP RIDE LISTENER
+  // ==========================================================
 
   const stopRideListener = () => {
     if (
@@ -1145,9 +1835,9 @@ export default function BookRideScreen() {
     }
   };
 
-  // =========================================================
+  // ==========================================================
   // CANCEL RIDE
-  // =========================================================
+  // ==========================================================
 
   const handleCancel = async () => {
     if (!rideId) {
@@ -1156,7 +1846,7 @@ export default function BookRideScreen() {
 
     try {
       console.log(
-        "❌ Cancelling ride:",
+        "Cancelling ride:",
         rideId
       );
 
@@ -1166,12 +1856,6 @@ export default function BookRideScreen() {
           "rides",
           rideId
         );
-
-      // -------------------------------------------------------
-      // IMPORTANT:
-      // Actually update Firestore.
-      // This allows the rider to book another ride.
-      // -------------------------------------------------------
 
       await updateDoc(
         rideRef,
@@ -1185,7 +1869,7 @@ export default function BookRideScreen() {
       );
 
       console.log(
-        "✅ Ride cancelled in Firestore."
+        "Ride cancelled in Firestore."
       );
 
       stopRideListener();
@@ -1194,9 +1878,7 @@ export default function BookRideScreen() {
         false
       );
 
-      setRideId(
-        null
-      );
+      setRideId(null);
 
       navigatingRef.current =
         false;
@@ -1207,7 +1889,7 @@ export default function BookRideScreen() {
       );
     } catch (error) {
       console.error(
-        "❌ CANCEL RIDE ERROR:",
+        "CANCEL RIDE ERROR:",
         error
       );
 
@@ -1218,34 +1900,42 @@ export default function BookRideScreen() {
     }
   };
 
-  // =========================================================
+  // ==========================================================
   // UI
-  // =========================================================
+  // ==========================================================
 
   return (
     <ScrollView
-      contentContainerStyle={styles.container}
+      contentContainerStyle={
+        styles.container
+      }
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={true}
     >
-      {/* =====================================================
+      {/* ====================================================
           BACK BUTTON
-      ===================================================== */}
+      ==================================================== */}
 
       <TouchableOpacity
-        style={styles.backButton}
+        style={
+          styles.backButton
+        }
         onPress={() => {
           router.replace("/");
         }}
       >
-        <Text style={styles.backButtonText}>
+        <Text
+          style={
+            styles.backButtonText
+          }
+        >
           ← Back
         </Text>
       </TouchableOpacity>
 
-      {/* =====================================================
+      {/* ====================================================
           TITLE
-      ===================================================== */}
+      ==================================================== */}
 
       <Text
         style={styles.title}
@@ -1255,9 +1945,9 @@ export default function BookRideScreen() {
 
       {!waitingForDriver && (
         <>
-          {/* =================================================
-              PICKUP
-          ================================================= */}
+          {/* ==================================================
+              PICKUP LOCATION
+          ================================================== */}
 
           <Text
             style={styles.label}
@@ -1266,76 +1956,77 @@ export default function BookRideScreen() {
           </Text>
 
           <View
-            style={
-              styles.locationRow
-            }
+            style={styles.dropRow}
           >
             <TextInput
-              style={
-                styles.locationInput
+              style={styles.dropInput}
+              placeholder={
+                gettingLocation
+                  ? "Getting current location..."
+                  : "Enter pickup location"
               }
-              placeholder="Getting current location..."
-              value={
-                pickupLocation
-              }
-              onChangeText={
-                setPickupLocation
-              }
-              editable={
-                !gettingLocation
-              }
+              value={pickupLocation}
+              onChangeText={(text) => {
+                setPickupLocation(text);
+
+                // The typed address may no longer match the
+                // previously selected GPS coordinates.
+                setPickupLatitude(null);
+                setPickupLongitude(null);
+              }}
+              editable={!gettingLocation}
             />
 
-            {gettingLocation && (
-              <ActivityIndicator
-                size="small"
-              />
-            )}
+            <TouchableOpacity
+              style={styles.findButton}
+              onPress={findPickupLocation}
+              disabled={
+                findingLocation ||
+                gettingLocation
+              }
+            >
+              {findingLocation ? (
+                <ActivityIndicator
+                  size="small"
+                  color="#fff"
+                />
+              ) : (
+                <Text
+                  style={styles.findButtonText}
+                >
+                  Find
+                </Text>
+              )}
+            </TouchableOpacity>
           </View>
 
           <TouchableOpacity
-            style={
-              styles.currentLocationButton
-            }
-            onPress={
-              getCurrentLocation
-            }
-            disabled={
-              gettingLocation
-            }
+            style={styles.currentLocationButton}
+            onPress={getCurrentLocation}
+            disabled={gettingLocation}
           >
             <Text
-              style={
-                styles.currentLocationText
-              }
+              style={styles.currentLocationText}
             >
               📍 Use Current Location
             </Text>
           </TouchableOpacity>
 
-          {pickupLatitude !==
-            null &&
-            pickupLongitude !==
-              null && (
+          {pickupLatitude !== null &&
+            pickupLongitude !== null && (
               <Text
-                style={
-                  styles.coordinates
-                }
+                style={styles.coordinates}
               >
                 Pickup GPS:{" "}
-                {pickupLatitude.toFixed(
-                  6
-                )}
+                {pickupLatitude.toFixed(6)}
                 ,{" "}
-                {pickupLongitude.toFixed(
-                  6
-                )}
+                {pickupLongitude.toFixed(6)}
               </Text>
             )}
 
-          {/* =================================================
+          {/* ==================================================
               DROP LOCATION
-          ================================================= */}
+          ================================================== */}
 
           <Text
             style={styles.label}
@@ -1363,9 +2054,6 @@ export default function BookRideScreen() {
                   text
                 );
 
-                // Destination changed.
-                // Previous coordinates are
-                // no longer valid.
                 setDropLatitude(
                   null
                 );
@@ -1424,9 +2112,31 @@ export default function BookRideScreen() {
               </Text>
             )}
 
-          {/* =================================================
+          {/* ==================================================
+              MAP
+          ================================================== */}
+
+          <Text
+            style={styles.label}
+          >
+            Map
+          </Text>
+
+          <RideMap
+            mapRef={mapRef}
+            defaultMapRegion={defaultMapRegion}
+            pickupLatitude={pickupLatitude}
+            pickupLongitude={pickupLongitude}
+            pickupLocation={pickupLocation}
+            dropLatitude={dropLatitude}
+            dropLongitude={dropLongitude}
+            dropLocation={dropLocation}
+            onMapReady={fitMapToLocations}
+          />
+
+          {/* ==================================================
               VEHICLE TYPE
-          ================================================= */}
+          ================================================== */}
 
           <Text
             style={styles.label}
@@ -1434,104 +2144,139 @@ export default function BookRideScreen() {
             Select Vehicle
           </Text>
 
-          <View
-            style={styles.vehicleTypeContainer}
-          >
-            <TouchableOpacity
-              style={[
-                styles.vehicleTypeButton,
-                selectedVehicleType === "Car" &&
-                  styles.selectedVehicleTypeButton,
-              ]}
-              onPress={() =>
-                setSelectedVehicleType("Car")
+          {loadingVehicleTypes ? (
+            <View
+              style={
+                styles.vehicleLoadingContainer
+              }
+            >
+              <ActivityIndicator
+                size="small"
+              />
+
+              <Text
+                style={
+                  styles.vehicleLoadingText
+                }
+              >
+                Loading vehicle types...
+              </Text>
+            </View>
+          ) : vehicleTypes.length ===
+            0 ? (
+            <View
+              style={
+                styles.noVehicleContainer
               }
             >
               <Text
-                style={[
-                  styles.vehicleTypeText,
-                  selectedVehicleType === "Car" &&
-                    styles.selectedVehicleTypeText,
-                ]}
+                style={
+                  styles.noVehicleText
+                }
               >
-                🚗 Car
+                No active vehicle types available.
               </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.vehicleTypeButton,
-                selectedVehicleType === "Auto" &&
-                  styles.selectedVehicleTypeButton,
-              ]}
-              onPress={() =>
-                setSelectedVehicleType("Auto")
+            </View>
+          ) : (
+            <View
+              style={
+                styles.vehicleTypeContainer
               }
             >
-              <Text
-                style={[
-                  styles.vehicleTypeText,
-                  selectedVehicleType === "Auto" &&
-                    styles.selectedVehicleTypeText,
-                ]}
-              >
-                🛺 Auto
-              </Text>
-            </TouchableOpacity>
+              {vehicleTypes.map(
+                (vehicleType) => {
+                  const selected =
+                    selectedVehicleType?.id ===
+                    vehicleType.id;
 
-            <TouchableOpacity
-              style={[
-                styles.vehicleTypeButton,
-                selectedVehicleType === "Bike" &&
-                  styles.selectedVehicleTypeButton,
-              ]}
-              onPress={() =>
-                setSelectedVehicleType("Bike")
-              }
-            >
-              <Text
-                style={[
-                  styles.vehicleTypeText,
-                  selectedVehicleType === "Bike" &&
-                    styles.selectedVehicleTypeText,
-                ]}
-              >
-                🏍️ Bike
-              </Text>
-            </TouchableOpacity>
+                  return (
+                    <TouchableOpacity
+                      key={
+                        vehicleType.id
+                      }
+                      style={[
+                        styles.vehicleTypeButton,
+                        selected &&
+                          styles.selectedVehicleTypeButton,
+                      ]}
+                      onPress={() =>
+                        setSelectedVehicleType(
+                          vehicleType
+                        )
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.vehicleTypeText,
+                          selected &&
+                            styles.selectedVehicleTypeText,
+                        ]}
+                      >
+                        {vehicleType.icon
+                          ? `${vehicleType.icon} `
+                          : ""}
+                        {vehicleType.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                }
+              )}
+            </View>
+          )}
 
-            <TouchableOpacity
-              style={[
-                styles.vehicleTypeButton,
-                selectedVehicleType === "Van" &&
-                  styles.selectedVehicleTypeButton,
-              ]}
-              onPress={() =>
-                setSelectedVehicleType("Van")
-              }
-            >
-              <Text
-                style={[
-                  styles.vehicleTypeText,
-                  selectedVehicleType === "Van" &&
-                    styles.selectedVehicleTypeText,
-                ]}
-              >
-                🚐 Van
-              </Text>
-            </TouchableOpacity>
-          </View>
+          {/* ==================================================
+              ESTIMATED FARE
+          ================================================== */}
 
-          {/* =================================================
+          {selectedVehicleType && (
+            <View style={styles.fareCard}>
+              <Text style={styles.fareTitle}>
+                Estimated Fare
+              </Text>
+
+              {estimatedFare !== null ? (
+                <>
+                  <Text style={styles.fareAmount}>
+                    ₹{estimatedFare.toFixed(2)}
+                  </Text>
+
+                  <Text style={styles.fareDetails}>
+                    {selectedVehicleType.name}: ₹
+                    {selectedVehicleType.baseFare.toFixed(
+                      2
+                    )} base + ₹
+                    {selectedVehicleType.perKmRate.toFixed(
+                      2
+                    )}
+                    /km
+                  </Text>
+
+                  <Text style={styles.fareDetails}>
+                    Estimated distance:{" "}
+                    {estimatedDistanceKm!.toFixed(2)} km
+                  </Text>
+                </>
+              ) : (
+                <Text style={styles.fareDetails}>
+                  Enter and find a drop location to see
+                  the estimated fare.
+                </Text>
+              )}
+            </View>
+          )}
+
+          {/* ==================================================
               BOOK RIDE
-          ================================================= */}
+          ================================================== */}
 
           <TouchableOpacity
             style={[
               styles.bookButton,
               (booking ||
                 gettingLocation ||
-                findingLocation) &&
+                findingLocation ||
+                loadingVehicleTypes ||
+                !selectedVehicleType) &&
                 styles.disabledButton,
             ]}
             onPress={
@@ -1540,7 +2285,9 @@ export default function BookRideScreen() {
             disabled={
               booking ||
               gettingLocation ||
-              findingLocation
+              findingLocation ||
+              loadingVehicleTypes ||
+              !selectedVehicleType
             }
           >
             {booking ? (
@@ -1560,9 +2307,9 @@ export default function BookRideScreen() {
         </>
       )}
 
-      {/* =====================================================
+      {/* ====================================================
           WAITING FOR DRIVER
-      ===================================================== */}
+      ==================================================== */}
 
       {waitingForDriver && (
         <View
@@ -1587,8 +2334,7 @@ export default function BookRideScreen() {
               styles.waitingText
             }
           >
-            Your ride has been
-            created.
+            Your ride has been created.
           </Text>
 
           <Text
@@ -1596,9 +2342,19 @@ export default function BookRideScreen() {
               styles.waitingText
             }
           >
-            Waiting for a driver
-            to accept your ride...
+            Waiting for a driver to accept your ride...
           </Text>
+
+          {selectedVehicleType && (
+            <Text
+              style={
+                styles.selectedVehicleWaiting
+              }
+            >
+              Vehicle:{" "}
+              {selectedVehicleType.name}
+            </Text>
+          )}
 
           {rideId && (
             <Text
@@ -1697,8 +2453,7 @@ const styles =
     },
 
     currentLocationButton: {
-      alignSelf:
-        "flex-start",
+      alignSelf: "flex-start",
       paddingVertical: 8,
       paddingHorizontal: 5,
       marginBottom: 5,
@@ -1727,8 +2482,7 @@ const styles =
     },
 
     findButton: {
-      backgroundColor:
-        "#34C759",
+      backgroundColor: "#34C759",
       paddingVertical: 14,
       paddingHorizontal: 18,
       borderRadius: 8,
@@ -1748,6 +2502,38 @@ const styles =
       marginBottom: 10,
     },
 
+    // ========================================================
+    // VEHICLE TYPES
+    // ========================================================
+
+    vehicleLoadingContainer: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      paddingVertical: 20,
+      marginBottom: 10,
+    },
+
+    vehicleLoadingText: {
+      marginLeft: 10,
+      fontSize: 15,
+      color: "#666",
+    },
+
+    noVehicleContainer: {
+      padding: 15,
+      borderWidth: 1,
+      borderColor: "#ddd",
+      borderRadius: 8,
+      marginBottom: 10,
+    },
+
+    noVehicleText: {
+      textAlign: "center",
+      color: "#777",
+      fontSize: 15,
+    },
+
     vehicleTypeContainer: {
       flexDirection: "row",
       flexWrap: "wrap",
@@ -1761,6 +2547,7 @@ const styles =
       borderColor: "#ccc",
       borderRadius: 8,
       paddingVertical: 14,
+      paddingHorizontal: 5,
       alignItems: "center",
       marginBottom: 10,
       backgroundColor: "#fff",
@@ -1775,15 +2562,52 @@ const styles =
       fontSize: 16,
       fontWeight: "600",
       color: "#333",
+      textAlign: "center",
     },
 
     selectedVehicleTypeText: {
       color: "#fff",
     },
 
+    // ========================================================
+    // ESTIMATED FARE
+    // ========================================================
+
+    fareCard: {
+      borderWidth: 1,
+      borderColor: "#ddd",
+      borderRadius: 10,
+      padding: 15,
+      marginTop: 5,
+      marginBottom: 10,
+      backgroundColor: "#f8f8f8",
+    },
+
+    fareTitle: {
+      fontSize: 16,
+      fontWeight: "600",
+      marginBottom: 5,
+    },
+
+    fareAmount: {
+      fontSize: 28,
+      fontWeight: "bold",
+      color: "#007AFF",
+      marginBottom: 5,
+    },
+
+    fareDetails: {
+      fontSize: 13,
+      color: "#666",
+      marginTop: 3,
+    },
+
+    // ========================================================
+    // BOOK BUTTON
+    // ========================================================
+
     bookButton: {
-      backgroundColor:
-        "#007AFF",
+      backgroundColor: "#007AFF",
       padding: 16,
       borderRadius: 8,
       alignItems: "center",
@@ -1800,10 +2624,13 @@ const styles =
       fontWeight: "bold",
     },
 
+    // ========================================================
+    // WAITING
+    // ========================================================
+
     waitingContainer: {
       flex: 1,
-      justifyContent:
-        "center",
+      justifyContent: "center",
       alignItems: "center",
       paddingHorizontal: 20,
     },
@@ -1820,6 +2647,13 @@ const styles =
       textAlign: "center",
       marginBottom: 8,
       color: "#555",
+    },
+
+    selectedVehicleWaiting: {
+      fontSize: 15,
+      fontWeight: "600",
+      marginTop: 10,
+      color: "#333",
     },
 
     rideId: {
