@@ -15,7 +15,8 @@ import {
   View,
 } from "react-native";
 
-import { db } from "../../services/firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth, db } from "../../services/firebase";
 import RiderMap from "../components/RiderMap.web";
 
 export default function RideProgress() {
@@ -86,176 +87,260 @@ export default function RideProgress() {
       return;
     }
 
+    let unsubscribeRide: (() => void) | null =
+      null;
+
     console.log(
-      "Starting RideProgress listener:",
+      "Preparing RideProgress listener:",
       rideId
     );
 
-    const rideRef = doc(
-      db,
-      "rides",
-      rideId
-    );
+    // ---------------------------------------------------------
+    // Wait for Firebase authentication state.
+    //
+    // This is important because after payment we call
+    // signOut(auth). The RideProgress Firestore listener must
+    // stop immediately when the rider is logged out.
+    // ---------------------------------------------------------
 
-    const unsubscribe = onSnapshot(
-      rideRef,
-      (snapshot) => {
-        if (!snapshot.exists()) {
+    const unsubscribeAuth =
+      onAuthStateChanged(
+        auth,
+        (user) => {
+          // ---------------------------------------------------
+          // Stop any previous ride listener first.
+          // ---------------------------------------------------
+
+          if (unsubscribeRide) {
+            console.log(
+              "Stopping existing RideProgress listener."
+            );
+
+            unsubscribeRide();
+            unsubscribeRide = null;
+          }
+
+          // ---------------------------------------------------
+          // Rider has logged out.
+          // Do NOT start a Firestore listener.
+          // ---------------------------------------------------
+
+          if (!user) {
+            console.log(
+              "RideProgress: rider is logged out. Firestore listener stopped."
+            );
+
+            return;
+          }
+
           console.log(
-            "Ride document does not exist."
-          );
-          return;
-        }
-
-        const ride = snapshot.data();
-
-        console.log(
-          "RideProgress Firestore update:",
-          ride
-        );
-
-        // =====================================================
-        // RIDE STATUS
-        // =====================================================
-
-        if (ride.status) {
-          setRideStatus(String(ride.status));
-
-          console.log(
-            "RIDE STATUS UPDATED:",
-            ride.status
-          );
-        }
-
-        // =====================================================
-        // DRIVER INFORMATION
-        // =====================================================
-
-        if (ride.driverId) {
-          setDriverId(
-            String(ride.driverId)
-          );
-        }
-
-        if (ride.driverName) {
-          setDriverName(
-            String(ride.driverName)
-          );
-        }
-
-        if (ride.vehicle) {
-          setVehicle(
-            String(ride.vehicle)
-          );
-        }
-
-        if (ride.vehicleName) {
-          setVehicle(
-            String(ride.vehicleName)
-          );
-        }
-
-        if (ride.vehicleNumber) {
-          setVehicleNumber(
-            String(ride.vehicleNumber)
-          );
-        }
-
-        // =====================================================
-        // PICKUP LOCATION
-        // =====================================================
-
-        if (
-          typeof ride.pickupLatitude ===
-          "number"
-        ) {
-          setPickupLatitude(
-            ride.pickupLatitude
-          );
-        }
-
-        if (
-          typeof ride.pickupLongitude ===
-          "number"
-        ) {
-          setPickupLongitude(
-            ride.pickupLongitude
-          );
-        }
-
-        if (ride.pickupLocation) {
-          setPickupLocation(
-            String(ride.pickupLocation)
-          );
-        }
-
-        // =====================================================
-        // DROP LOCATION
-        // =====================================================
-
-        if (
-          typeof ride.dropLatitude ===
-          "number"
-        ) {
-          setDropoffLatitude(
-            ride.dropLatitude
-          );
-        }
-
-        if (
-          typeof ride.dropLongitude ===
-          "number"
-        ) {
-          setDropoffLongitude(
-            ride.dropLongitude
-          );
-        }
-
-        if (ride.dropLocation) {
-          setDropoffLocation(
-            String(ride.dropLocation)
-          );
-        }
-
-        // =====================================================
-        // DRIVER LIVE LOCATION
-        // =====================================================
-
-        if (
-          typeof ride.driverLatitude ===
-            "number" &&
-          typeof ride.driverLongitude ===
-            "number"
-        ) {
-          setDriverLatitude(
-            ride.driverLatitude
-          );
-
-          setDriverLongitude(
-            ride.driverLongitude
+            "RideProgress authenticated rider:",
+            user.uid
           );
 
           console.log(
-            "LIVE DRIVER LOCATION:",
-            ride.driverLatitude,
-            ride.driverLongitude
+            "Starting RideProgress listener:",
+            rideId
           );
+
+          const rideRef = doc(
+            db,
+            "rides",
+            rideId
+          );
+
+          unsubscribeRide =
+            onSnapshot(
+              rideRef,
+              (snapshot) => {
+                if (!snapshot.exists()) {
+                  console.log(
+                    "Ride document does not exist."
+                  );
+                  return;
+                }
+
+                const ride =
+                  snapshot.data();
+
+                console.log(
+                  "RideProgress Firestore update:",
+                  ride
+                );
+
+                // =============================================
+                // RIDE STATUS
+                // =============================================
+
+                if (ride.status) {
+                  setRideStatus(
+                    String(ride.status)
+                  );
+
+                  console.log(
+                    "RIDE STATUS UPDATED:",
+                    ride.status
+                  );
+                }
+
+                // =============================================
+                // DRIVER INFORMATION
+                // =============================================
+
+                if (ride.driverId) {
+                  setDriverId(
+                    String(
+                      ride.driverId
+                    )
+                  );
+                }
+
+                if (ride.driverName) {
+                  setDriverName(
+                    String(
+                      ride.driverName
+                    )
+                  );
+                }
+
+                if (ride.vehicle) {
+                  setVehicle(
+                    String(
+                      ride.vehicle
+                    )
+                  );
+                }
+
+                if (ride.vehicleName) {
+                  setVehicle(
+                    String(
+                      ride.vehicleName
+                    )
+                  );
+                }
+
+                if (ride.vehicleNumber) {
+                  setVehicleNumber(
+                    String(
+                      ride.vehicleNumber
+                    )
+                  );
+                }
+
+                // =============================================
+                // PICKUP LOCATION
+                // =============================================
+
+                if (
+                  typeof ride.pickupLatitude ===
+                  "number"
+                ) {
+                  setPickupLatitude(
+                    ride.pickupLatitude
+                  );
+                }
+
+                if (
+                  typeof ride.pickupLongitude ===
+                  "number"
+                ) {
+                  setPickupLongitude(
+                    ride.pickupLongitude
+                  );
+                }
+
+                if (ride.pickupLocation) {
+                  setPickupLocation(
+                    String(
+                      ride.pickupLocation
+                    )
+                  );
+                }
+
+                // =============================================
+                // DROP LOCATION
+                // =============================================
+
+                if (
+                  typeof ride.dropLatitude ===
+                  "number"
+                ) {
+                  setDropoffLatitude(
+                    ride.dropLatitude
+                  );
+                }
+
+                if (
+                  typeof ride.dropLongitude ===
+                  "number"
+                ) {
+                  setDropoffLongitude(
+                    ride.dropLongitude
+                  );
+                }
+
+                if (ride.dropLocation) {
+                  setDropoffLocation(
+                    String(
+                      ride.dropLocation
+                    )
+                  );
+                }
+
+                // =============================================
+                // DRIVER LIVE LOCATION
+                // =============================================
+
+                if (
+                  typeof ride.driverLatitude ===
+                    "number" &&
+                  typeof ride.driverLongitude ===
+                    "number"
+                ) {
+                  setDriverLatitude(
+                    ride.driverLatitude
+                  );
+
+                  setDriverLongitude(
+                    ride.driverLongitude
+                  );
+
+                  console.log(
+                    "LIVE DRIVER LOCATION:",
+                    ride.driverLatitude,
+                    ride.driverLongitude
+                  );
+                }
+              },
+              (error) => {
+                // Do not use console.error here.
+                // Permission errors can occur during logout
+                // while Firebase is changing auth state.
+                console.log(
+                  "RideProgress Firestore listener error:",
+                  error?.code ||
+                    error?.message
+                );
+              }
+            );
         }
-      },
-      (error) => {
-        console.error(
-          "RideProgress Firestore listener error:",
-          error
-        );
-      }
-    );
+      );
+
+    // ---------------------------------------------------------
+    // Cleanup both the auth listener and ride listener.
+    // ---------------------------------------------------------
 
     return () => {
       console.log(
-        "Stopping RideProgress listener."
+        "Cleaning up RideProgress listeners."
       );
 
-      unsubscribe();
+      unsubscribeAuth();
+
+      if (unsubscribeRide) {
+        unsubscribeRide();
+        unsubscribeRide = null;
+      }
     };
   }, [rideId]);
 
@@ -459,6 +544,21 @@ export default function RideProgress() {
         ===================================================== */}
 
         <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => {
+              if (router.canGoBack()) {
+                router.back();
+              } else {
+                router.replace("/bookride");
+              }
+            }}
+          >
+            <Text style={styles.backButtonText}>
+              ← Back
+            </Text>
+          </TouchableOpacity>
+
           <Text
             style={styles.headerTitle}
           >
@@ -892,9 +992,22 @@ const styles = StyleSheet.create({
   header: {
     backgroundColor: "#FFFFFF",
     paddingHorizontal: 20,
-    paddingVertical: 18,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: "#E5E7EB",
+  },
+
+  backButton: {
+    alignSelf: "flex-start",
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    marginBottom: 4,
+  },
+
+  backButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#2563EB",
   },
 
   headerTitle: {

@@ -1,9 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+
 import { router } from "expo-router";
+
 import {
   GoogleAuthProvider,
   signInWithPopup,
 } from "firebase/auth";
+
 import {
   collection,
   doc,
@@ -13,6 +16,7 @@ import {
   setDoc,
   where,
 } from "firebase/firestore";
+
 import { useState } from "react";
 
 import {
@@ -46,15 +50,10 @@ export default function LoginScreen() {
     try {
       const ridesQuery = query(
         collection(db, "rides"),
-        where(
-          "riderId",
-          "==",
-          riderId
-        )
+        where("riderId", "==", riderId)
       );
 
-      const snapshot =
-        await getDocs(ridesQuery);
+      const snapshot = await getDocs(ridesQuery);
 
       if (snapshot.empty) {
         return null;
@@ -67,19 +66,14 @@ export default function LoginScreen() {
         }))
         .filter(
           (ride: any) =>
-            ride.status ===
-              "requested" ||
-            ride.status ===
-              "accepted" ||
-            ride.status ===
-              "driverArrived" ||
-            ride.status ===
-              "inProgress" ||
-            ride.status ===
-              "completed"
+            ride.status === "requested" ||
+            ride.status === "accepted" ||
+            ride.status === "driverArrived" ||
+            ride.status === "inProgress" ||
+            ride.status === "completed"
         );
 
-      // Most recent ride first.
+      // Most recent ride first
       rides.sort(
         (a: any, b: any) => {
           const aTime =
@@ -100,18 +94,13 @@ export default function LoginScreen() {
       // 1. Active ride
       // ----------------------------------------------------
 
-      const activeRide =
-        rides.find(
-          (ride: any) =>
-            ride.status ===
-              "requested" ||
-            ride.status ===
-              "accepted" ||
-            ride.status ===
-              "driverArrived" ||
-            ride.status ===
-              "inProgress"
-        );
+      const activeRide = rides.find(
+        (ride: any) =>
+          ride.status === "requested" ||
+          ride.status === "accepted" ||
+          ride.status === "driverArrived" ||
+          ride.status === "inProgress"
+      );
 
       if (activeRide) {
         return activeRide;
@@ -121,22 +110,20 @@ export default function LoginScreen() {
       // 2. Completed ride with payment pending
       // ----------------------------------------------------
 
-      const pendingPaymentRide =
-        rides.find(
-          (ride: any) =>
-            ride.status ===
-              "completed" &&
-            ride.paymentStatus !==
-              "paid"
-        );
+      const pendingPaymentRide = rides.find(
+        (ride: any) =>
+          ride.status === "completed" &&
+          ride.paymentStatus !== "paid"
+      );
 
       if (pendingPaymentRide) {
         return pendingPaymentRide;
       }
 
       return null;
+
     } catch (error) {
-      console.error(
+      console.log(
         "FIND RIDE AFTER LOGIN ERROR:",
         error
       );
@@ -145,19 +132,18 @@ export default function LoginScreen() {
     }
   };
 
+  // =====================================================
+  // NAVIGATE AFTER LOGIN
+  // =====================================================
+
   const navigateAfterLogin = async (
     userId: string
   ) => {
     const ride =
-      await findRideAfterLogin(
-        userId
-      );
+      await findRideAfterLogin(userId);
 
     if (!ride) {
-      router.replace(
-        "/bookride"
-      );
-
+      router.replace("/bookride");
       return;
     }
 
@@ -173,8 +159,7 @@ export default function LoginScreen() {
 
     console.log(
       "PAYMENT STATUS:",
-      ride.paymentStatus ||
-        "pending"
+      ride.paymentStatus || "pending"
     );
 
     // ----------------------------------------------------
@@ -182,17 +167,13 @@ export default function LoginScreen() {
     // ----------------------------------------------------
 
     if (
-      ride.status ===
-        "completed" &&
-      ride.paymentStatus !==
-        "paid"
+      ride.status === "completed" &&
+      ride.paymentStatus !== "paid"
     ) {
       router.replace({
-        pathname:
-          "/payment",
+        pathname: "/payment",
         params: {
-          rideId:
-            ride.id,
+          rideId: ride.id,
           amount: String(
             ride.fare ??
             ride.amount ??
@@ -208,16 +189,11 @@ export default function LoginScreen() {
     // Requested ride
     // ----------------------------------------------------
 
-    if (
-      ride.status ===
-      "requested"
-    ) {
+    if (ride.status === "requested") {
       router.replace({
-        pathname:
-          "/bookride",
+        pathname: "/bookride",
         params: {
-          resumeRideId:
-            ride.id,
+          resumeRideId: ride.id,
         },
       });
 
@@ -229,28 +205,21 @@ export default function LoginScreen() {
     // ----------------------------------------------------
 
     if (
-      ride.status ===
-        "accepted" ||
-      ride.status ===
-        "driverArrived" ||
-      ride.status ===
-        "inProgress"
+      ride.status === "accepted" ||
+      ride.status === "driverArrived" ||
+      ride.status === "inProgress"
     ) {
       router.replace({
-        pathname:
-          "/rideprogress",
+        pathname: "/rideprogress",
         params: {
-          rideId:
-            ride.id,
+          rideId: ride.id,
         },
       });
 
       return;
     }
 
-    router.replace(
-      "/bookride"
-    );
+    router.replace("/bookride");
   };
 
   // =====================================================
@@ -258,19 +227,47 @@ export default function LoginScreen() {
   // =====================================================
 
   const handleLogin = async () => {
-    if (!email.trim()) {
+    const emailAddress = email.trim();
+
+    // ----------------------------------------------------
+    // EMAIL VALIDATION
+    // ----------------------------------------------------
+
+    if (!emailAddress) {
       Alert.alert(
         "Validation",
         "Please enter your email address."
       );
+
       return;
     }
+
+    // ----------------------------------------------------
+    // PASSWORD VALIDATION
+    // ----------------------------------------------------
 
     if (!password) {
       Alert.alert(
         "Validation",
         "Please enter your password."
       );
+
+      return;
+    }
+
+    // ----------------------------------------------------
+    // EMAIL FORMAT VALIDATION
+    // ----------------------------------------------------
+
+    const emailPattern =
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!emailPattern.test(emailAddress)) {
+      Alert.alert(
+        "Validation",
+        "Please enter a valid email address."
+      );
+
       return;
     }
 
@@ -279,11 +276,15 @@ export default function LoginScreen() {
 
       console.log(
         "Logging in rider:",
-        email.trim()
+        emailAddress
       );
 
+      // --------------------------------------------------
+      // FIREBASE LOGIN
+      // --------------------------------------------------
+
       const user = await loginUser(
-        email.trim(),
+        emailAddress,
         password
       );
 
@@ -291,6 +292,10 @@ export default function LoginScreen() {
         "Firebase login successful:",
         user.uid
       );
+
+      // --------------------------------------------------
+      // SAVE USER INFORMATION
+      // --------------------------------------------------
 
       await AsyncStorage.setItem(
         "firebaseUid",
@@ -305,22 +310,37 @@ export default function LoginScreen() {
       }
 
       // Remove old JWT if one exists
-      await AsyncStorage.removeItem(
-        "token"
+      await AsyncStorage.removeItem("token");
+
+      // --------------------------------------------------
+      // NAVIGATE
+      // --------------------------------------------------
+
+      await navigateAfterLogin(
+        user.uid
       );
 
-      await navigateAfterLogin(user.uid);
-
     } catch (error: any) {
-      console.error(
+
+      // IMPORTANT:
+      // Use console.log instead of console.error.
+      // console.error causes the Expo Web development
+      // Console Error overlay to appear.
+
+      console.log(
         "Login error:",
-        error
+        error?.code
       );
 
       let message =
-        "Unable to login. Please try again.";
+        "Invalid email or password.";
+
+      // --------------------------------------------------
+      // FIREBASE LOGIN ERRORS
+      // --------------------------------------------------
 
       switch (error?.code) {
+
         case "auth/invalid-email":
           message =
             "Please enter a valid email address.";
@@ -331,19 +351,24 @@ export default function LoginScreen() {
             "Invalid email or password.";
           break;
 
-        case "auth/user-not-found":
-          message =
-            "No account found with this email address.";
-          break;
-
         case "auth/wrong-password":
           message =
-            "Incorrect password.";
+            "Invalid email or password.";
+          break;
+
+        case "auth/user-not-found":
+          message =
+            "Invalid email or password.";
           break;
 
         case "auth/user-disabled":
           message =
             "This account has been disabled.";
+          break;
+
+        case "auth/too-many-requests":
+          message =
+            "Too many login attempts. Please try again later.";
           break;
 
         case "auth/network-request-failed":
@@ -353,10 +378,13 @@ export default function LoginScreen() {
 
         default:
           message =
-            error?.message ||
-            message;
+            "Invalid email or password.";
           break;
       }
+
+      // --------------------------------------------------
+      // SHOW USER-FRIENDLY MESSAGE
+      // --------------------------------------------------
 
       Alert.alert(
         "Login Failed",
@@ -391,7 +419,7 @@ export default function LoginScreen() {
     );
 
     // -----------------------------------------------------
-    // CURRENTLY WE ARE TESTING GOOGLE SIGN-IN ON WEB
+    // CURRENTLY WEB ONLY
     // -----------------------------------------------------
 
     if (Platform.OS !== "web") {
@@ -494,8 +522,7 @@ export default function LoginScreen() {
           photoURL:
             user.photoURL || "",
 
-          authProvider:
-            "google",
+          authProvider: "google",
 
           updatedAt:
             serverTimestamp(),
@@ -537,55 +564,53 @@ export default function LoginScreen() {
       }
 
       // Remove old JWT
-      await AsyncStorage.removeItem(
-        "token"
-      );
+      await AsyncStorage.removeItem("token");
 
       console.log(
         "Rider local storage updated."
       );
 
       // -----------------------------------------------------
-      // GO TO BOOK RIDE
+      // GO TO NEXT RIDER SCREEN
       // -----------------------------------------------------
 
-      await navigateAfterLogin(user.uid);
+      await navigateAfterLogin(
+        user.uid
+      );
 
     } catch (error: any) {
-      console.error(
-        "================================"
+
+      // Do NOT use console.error here.
+      // Expected Google popup errors should not
+      // trigger the Expo Web error overlay.
+
+      console.log(
+        "GOOGLE SIGN-IN ENDED"
       );
 
-      console.error(
-        "GOOGLE SIGN-IN ERROR"
-      );
-
-      console.error(
+      console.log(
         "ERROR CODE:",
         error?.code
       );
 
-      console.error(
+      console.log(
         "ERROR MESSAGE:",
         error?.message
-      );
-
-      console.error(
-        "FULL ERROR:",
-        error
-      );
-
-      console.error(
-        "================================"
       );
 
       let message =
         "Unable to sign in with Google.";
 
       switch (error?.code) {
+
         case "auth/popup-closed-by-user":
           message =
             "Google Sign-In was cancelled.";
+          break;
+
+        case "auth/popup-timeout":
+          message =
+            "Google Sign-In timed out. Please try again.";
           break;
 
         case "auth/popup-blocked":
@@ -615,8 +640,7 @@ export default function LoginScreen() {
 
         default:
           message =
-            error?.message ||
-            message;
+            "Unable to sign in with Google.";
           break;
       }
 
@@ -859,6 +883,7 @@ export default function LoginScreen() {
         </View>
 
       </View>
+
     </View>
   );
 }
@@ -868,6 +893,7 @@ export default function LoginScreen() {
 // =====================================================
 
 const styles = StyleSheet.create({
+
   container: {
     flex: 1,
     justifyContent: "center",
@@ -1012,4 +1038,5 @@ const styles = StyleSheet.create({
     color: "#0066ff",
     fontWeight: "bold",
   },
+
 });
