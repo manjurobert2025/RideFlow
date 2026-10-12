@@ -1,19 +1,36 @@
-import { useEffect, useRef, useState } from "react";
 
-interface RiderMapProps {
+import React, { useEffect, useRef, useState } from "react";
+import { StyleSheet, Text, View } from "react-native";
+
+import type * as LeafletTypes from "leaflet";
+import "leaflet/dist/leaflet.css";
+
+type RiderMapProps = {
   latitude: number;
   longitude: number;
-
   dropoffLatitude: number | null;
   dropoffLongitude: number | null;
-
   pickupLocation: string;
   dropoffLocation: string;
-
   driverLatitude: number | null;
   driverLongitude: number | null;
+  mapRef?: React.RefObject<any>;
+};
 
-  mapRef: any;
+function hasValidCoordinates(
+  latitude: unknown,
+  longitude: unknown
+): latitude is number {
+  return (
+    typeof latitude === "number" &&
+    typeof longitude === "number" &&
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180
+  );
 }
 
 export default function RiderMap({
@@ -27,738 +44,398 @@ export default function RiderMap({
   driverLongitude,
   mapRef,
 }: RiderMapProps) {
-  // ============================================================
-  // REFS
-  // ============================================================
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const mapInstanceRef = useRef<LeafletTypes.Map | null>(null);
 
-  const mapContainerRef =
-    useRef<HTMLDivElement | null>(null);
+  const pickupMarkerRef = useRef<LeafletTypes.Marker | null>(null);
+  const dropoffMarkerRef = useRef<LeafletTypes.Marker | null>(null);
+  const driverMarkerRef = useRef<LeafletTypes.Marker | null>(null);
+  const routeLayerRef = useRef<LeafletTypes.Polyline | null>(null);
 
-  const mapInstanceRef =
-    useRef<any>(null);
+  const leafletRef = useRef<typeof import("leaflet") | null>(null);
+  const [mapReady, setMapReady] = useState(false);
+  const [routeError, setRouteError] = useState("");
 
-  const driverMarkerRef =
-    useRef<any>(null);
-
-  const pickupMarkerRef =
-    useRef<any>(null);
-
-  const dropoffMarkerRef =
-    useRef<any>(null);
-
-  const routeLayerRef =
-    useRef<any>(null);
-
-  const lastRouteDriverLocationRef =
-    useRef<{
-      latitude: number;
-      longitude: number;
-    } | null>(null);
-
-  const [mapReady, setMapReady] =
-    useState(false);
-
-  // ============================================================
-  // INITIALIZE MAP
-  // ============================================================
-
+  // Load Leaflet and create the map only in the browser.
   useEffect(() => {
     let cancelled = false;
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const initializeMap = async () => {
+    async function initializeMap() {
+      if (
+        typeof document === "undefined" ||
+        !containerRef.current ||
+        mapInstanceRef.current
+      ) {
+        return;
+      }
+
       try {
-        // --------------------------------------------------------
-        // Only initialize Leaflet in browser
-        // --------------------------------------------------------
+        // Load CSS only in the browser.
+        
 
-        if (
-          typeof window === "undefined" ||
-          typeof document === "undefined"
-        ) {
+        const leafletModule = await import("leaflet");
+        const leaflet = leafletModule.default ?? leafletModule;
+
+        if (cancelled || !containerRef.current) {
           return;
         }
 
-        // --------------------------------------------------------
-        // Dynamically import Leaflet
-        // This prevents "window is not defined" with Expo Web
-        // --------------------------------------------------------
+        const L = leafletModule.default ?? leafletModule;
+        leafletRef.current = L;
 
-        const leafletModule =
-          await import("leaflet");
+        const initialLatitude = hasValidCoordinates(
+          latitude,
+          longitude
+        )
+          ? latitude
+          : 10.8505;
 
-        if (cancelled) {
-          return;
-        }
+        const initialLongitude = hasValidCoordinates(
+          latitude,
+          longitude
+        )
+          ? longitude
+          : 76.2711;
 
-        const L =
-          (leafletModule as any).default ||
-          leafletModule;
-
-        // --------------------------------------------------------
-        // Add Leaflet CSS dynamically
-        // --------------------------------------------------------
-
-        if (
-          !document.getElementById(
-            "leaflet-css"
-          )
-        ) {
-          const link =
-            document.createElement("link");
-
-          link.id = "leaflet-css";
-          link.rel = "stylesheet";
-
-          link.href =
-            "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-
-          document.head.appendChild(link);
-        }
-
-        // --------------------------------------------------------
-        // Make sure container exists
-        // --------------------------------------------------------
-
-        if (
-          !mapContainerRef.current ||
-          mapInstanceRef.current
-        ) {
-          return;
-        }
-
-        // --------------------------------------------------------
-        // Create Leaflet map
-        // --------------------------------------------------------
-
-        const map = L.map(
-          mapContainerRef.current
-        ).setView(
-          [latitude, longitude],
-          14
+        const map = L.map(containerRef.current).setView(
+          [initialLatitude, initialLongitude],
+          13
         );
-
-        mapInstanceRef.current = map;
-
-        // --------------------------------------------------------
-        // OpenStreetMap tiles
-        // --------------------------------------------------------
 
         L.tileLayer(
           "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
           {
-            attribution:
-              "&copy; OpenStreetMap contributors",
+            attribution: "&copy; OpenStreetMap contributors",
             maxZoom: 19,
           }
         ).addTo(map);
 
-        // ========================================================
-        // PICKUP ICON
-        // ========================================================
+        mapInstanceRef.current = map;
 
-        const pickupIcon = L.divIcon({
-          className:
-            "custom-pickup-marker",
-
-          html: `
-            <div style="
-              width: 36px;
-              height: 36px;
-              border-radius: 50%;
-              background: #2563EB;
-              border: 3px solid white;
-              box-shadow: 0 2px 8px rgba(0,0,0,0.35);
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              font-size: 19px;
-            ">
-              📍
-            </div>
-          `,
-
-          iconSize: [36, 36],
-          iconAnchor: [18, 18],
-        });
-
-        // ========================================================
-        // DROPOFF ICON
-        // ========================================================
-
-        const dropoffIcon = L.divIcon({
-          className:
-            "custom-dropoff-marker",
-
-          html: `
-            <div style="
-              width: 36px;
-              height: 36px;
-              border-radius: 50%;
-              background: #DC2626;
-              border: 3px solid white;
-              box-shadow: 0 2px 8px rgba(0,0,0,0.35);
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              font-size: 19px;
-            ">
-              🏁
-            </div>
-          `,
-
-          iconSize: [36, 36],
-          iconAnchor: [18, 18],
-        });
-
-        // ========================================================
-        // DRIVER ICON
-        // ========================================================
-
-        const driverIcon = L.divIcon({
-          className:
-            "custom-driver-marker",
-
-          html: `
-            <div style="
-              width: 46px;
-              height: 46px;
-              border-radius: 50%;
-              background: #16A34A;
-              border: 4px solid white;
-              box-shadow: 0 3px 10px rgba(0,0,0,0.45);
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              font-size: 25px;
-            ">
-              🚗
-            </div>
-          `,
-
-          iconSize: [46, 46],
-          iconAnchor: [23, 23],
-        });
-
-        // ========================================================
-        // PICKUP MARKER
-        // ========================================================
-
-        pickupMarkerRef.current =
-          L.marker(
-            [latitude, longitude],
-            {
-              icon: pickupIcon,
-            }
-          )
-            .addTo(map)
-            .bindPopup(
-              `<strong>Pickup</strong><br/>${
-                pickupLocation ||
-                "Pickup location"
-              }`
-            );
-
-        // ========================================================
-        // DROPOFF MARKER
-        // ========================================================
-
-        if (
-          dropoffLatitude !== null &&
-          dropoffLongitude !== null
-        ) {
-          dropoffMarkerRef.current =
-            L.marker(
-              [
-                dropoffLatitude,
-                dropoffLongitude,
-              ],
-              {
-                icon: dropoffIcon,
-              }
-            )
-              .addTo(map)
-              .bindPopup(
-                `<strong>Destination</strong><br/>${
-                  dropoffLocation ||
-                  "Destination"
-                }`
-              );
+        if (mapRef) {
+          (mapRef as React.MutableRefObject<any>).current = map;
         }
-
-        // ========================================================
-        // DRIVER MARKER
-        // ========================================================
-
-        if (
-          driverLatitude !== null &&
-          driverLongitude !== null
-        ) {
-          driverMarkerRef.current =
-            L.marker(
-              [
-                driverLatitude,
-                driverLongitude,
-              ],
-              {
-                icon: driverIcon,
-              }
-            )
-              .addTo(map)
-              .bindPopup(
-                "<strong>Driver</strong><br/>Driver location is live"
-              );
-        }
-
-        // ========================================================
-        // MAP READY
-        // ========================================================
 
         setMapReady(true);
 
-        setTimeout(() => {
-          if (mapInstanceRef.current) {
-            mapInstanceRef.current.invalidateSize();
+        resizeTimer = setTimeout(() => {
+          if (!cancelled && mapInstanceRef.current) {
+            map.invalidateSize();
           }
-        }, 300);
-
-        // --------------------------------------------------------
-        // Expose map through mapRef if supplied
-        // --------------------------------------------------------
-
-        if (mapRef) {
-          if (
-            typeof mapRef === "object" &&
-            "current" in mapRef
-          ) {
-            mapRef.current = map;
-          }
-        }
+        }, 150);
       } catch (error) {
-        console.error(
-          "MAP INITIALIZATION ERROR:",
-          error
-        );
+        console.error("MAP INITIALIZATION ERROR:", error);
       }
-    };
+    }
 
-    initializeMap();
-
-    // ============================================================
-    // CLEANUP
-    // ============================================================
+    void initializeMap();
 
     return () => {
       cancelled = true;
 
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
+      if (resizeTimer !== undefined) {
+        clearTimeout(resizeTimer);
+      }
+
+      const map = mapInstanceRef.current;
+
+      if (map) {
+        map.remove();
         mapInstanceRef.current = null;
       }
 
-      driverMarkerRef.current = null;
       pickupMarkerRef.current = null;
       dropoffMarkerRef.current = null;
+      driverMarkerRef.current = null;
       routeLayerRef.current = null;
+      leafletRef.current = null;
 
-      setMapReady(false);
+      if (mapRef) {
+        (mapRef as React.MutableRefObject<any>).current = null;
+      }
     };
-
-    // Map initializes once.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ============================================================
-  // UPDATE DRIVER MARKER
-  // ============================================================
-
+  // Update pickup, drop-off, and driver markers.
   useEffect(() => {
-    if (
-      !mapReady ||
-      !mapInstanceRef.current ||
-      driverLatitude === null ||
-      driverLongitude === null
-    ) {
+    const map = mapInstanceRef.current;
+    const L = leafletRef.current;
+
+    if (!map || !L || !mapReady) {
       return;
     }
 
-    let cancelled = false;
+    // Pickup marker.
+    if (hasValidCoordinates(latitude, longitude)) {
+      const position: LeafletTypes.LatLngExpression = [
+        latitude,
+        longitude,
+      ];
 
-    const updateDriverMarker = async () => {
-      try {
-        const leafletModule =
-          await import("leaflet");
-
-        if (cancelled) {
-          return;
-        }
-
-        const L =
-          (leafletModule as any).default ||
-          leafletModule;
-
-        // --------------------------------------------------------
-        // Move existing driver marker
-        // --------------------------------------------------------
-
-        if (driverMarkerRef.current) {
-          driverMarkerRef.current.setLatLng([
-            driverLatitude,
-            driverLongitude,
-          ]);
-        } else {
-          // ------------------------------------------------------
-          // Create driver marker if it doesn't exist
-          // ------------------------------------------------------
-
-          const driverIcon = L.divIcon({
-            className:
-              "custom-driver-marker",
-
-            html: `
-              <div style="
-                width: 46px;
-                height: 46px;
-                border-radius: 50%;
-                background: #16A34A;
-                border: 4px solid white;
-                box-shadow: 0 3px 10px rgba(0,0,0,0.45);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                font-size: 25px;
-              ">
-                🚗
-              </div>
-            `,
-
-            iconSize: [46, 46],
-            iconAnchor: [23, 23],
-          });
-
-          driverMarkerRef.current =
-            L.marker(
-              [
-                driverLatitude,
-                driverLongitude,
-              ],
-              {
-                icon: driverIcon,
-              }
-            )
-              .addTo(
-                mapInstanceRef.current
-              )
-              .bindPopup(
-                "<strong>Driver</strong><br/>Driver location is live"
-              );
-        }
-      } catch (error) {
-        console.error(
-          "DRIVER MARKER ERROR:",
-          error
-        );
+      if (pickupMarkerRef.current) {
+        pickupMarkerRef.current.setLatLng(position);
+        pickupMarkerRef.current.setPopupContent(pickupLocation);
+      } else {
+        pickupMarkerRef.current = L.marker(position)
+          .addTo(map)
+          .bindPopup(pickupLocation);
       }
-    };
+    }
 
-    updateDriverMarker();
+    // Drop-off marker.
+    if (
+      typeof dropoffLatitude === "number" &&
+      typeof dropoffLongitude === "number" &&
+      Number.isFinite(dropoffLatitude) &&
+      Number.isFinite(dropoffLongitude) &&
+      dropoffLatitude >= -90 &&
+      dropoffLatitude <= 90 &&
+      dropoffLongitude >= -180 &&
+      dropoffLongitude <= 180
+    ) {
+      const position: LeafletTypes.LatLngExpression = [
+        dropoffLatitude,
+        dropoffLongitude,
+      ];
 
-    return () => {
-      cancelled = true;
-    };
+      if (dropoffMarkerRef.current) {
+        dropoffMarkerRef.current.setLatLng(position);
+        dropoffMarkerRef.current.setPopupContent(dropoffLocation);
+      } else {
+        dropoffMarkerRef.current = L.marker(position)
+          .addTo(map)
+          .bindPopup(dropoffLocation);
+      }
+    } else if (dropoffMarkerRef.current) {
+      dropoffMarkerRef.current.remove();
+      dropoffMarkerRef.current = null;
+    }
+
+    // Driver marker.
+    if (
+      typeof driverLatitude === "number" &&
+      typeof driverLongitude === "number" &&
+      Number.isFinite(driverLatitude) &&
+      Number.isFinite(driverLongitude) &&
+      driverLatitude >= -90 &&
+      driverLatitude <= 90 &&
+      driverLongitude >= -180 &&
+      driverLongitude <= 180
+    ) {
+      const position: LeafletTypes.LatLngExpression = [
+        driverLatitude,
+        driverLongitude,
+      ];
+
+      if (driverMarkerRef.current) {
+        driverMarkerRef.current.setLatLng(position);
+      } else {
+        driverMarkerRef.current = L.marker(position)
+          .addTo(map)
+          .bindPopup("Driver");
+      }
+    } else if (driverMarkerRef.current) {
+      driverMarkerRef.current.remove();
+      driverMarkerRef.current = null;
+    }
   }, [
+    mapReady,
+    latitude,
+    longitude,
+    pickupLocation,
+    dropoffLatitude,
+    dropoffLongitude,
+    dropoffLocation,
     driverLatitude,
     driverLongitude,
-    mapReady,
   ]);
 
-  // ============================================================
-  // GET ROAD ROUTE
-  // ============================================================
-
+  // Fetch and draw the route.
   useEffect(() => {
-    if (
-      !mapReady ||
-      !mapInstanceRef.current ||
-      driverLatitude === null ||
-      driverLongitude === null
-    ) {
-      return;
-    }
-
-    if (
-      dropoffLatitude === null ||
-      dropoffLongitude === null
-    ) {
-      return;
-    }
-
-    // ----------------------------------------------------------
-    // Check whether driver moved enough to request a new route
-    // ----------------------------------------------------------
-
-    const previous =
-      lastRouteDriverLocationRef.current;
-
-    if (previous) {
-      const latDifference =
-        Math.abs(
-          driverLatitude -
-            previous.latitude
-        );
-
-      const lngDifference =
-        Math.abs(
-          driverLongitude -
-            previous.longitude
-        );
-
-      // Approximately 50 metres
-      const movedEnough =
-        latDifference > 0.0005 ||
-        lngDifference > 0.0005;
-
-      if (!movedEnough) {
-        return;
-      }
-    }
-
-    // ----------------------------------------------------------
-    // Save current driver position
-    // ----------------------------------------------------------
-
-    lastRouteDriverLocationRef.current = {
-      latitude: driverLatitude,
-      longitude: driverLongitude,
-    };
-
     let cancelled = false;
 
-    const getRoute = async () => {
+    async function getRoute() {
+      const map = mapInstanceRef.current;
+      const L = leafletRef.current;
+
+      if (!map || !L || !mapReady) {
+        return;
+      }
+
+      if (
+        !hasValidCoordinates(latitude, longitude) ||
+        !hasValidCoordinates(dropoffLatitude, dropoffLongitude)
+      ) {
+        if (routeLayerRef.current) {
+          routeLayerRef.current.remove();
+          routeLayerRef.current = null;
+        }
+        return;
+      }
+
+      const points: [number, number][] = [];
+
+      // Driver -> pickup -> drop-off, when driver coordinates are available.
+      if (
+        typeof driverLatitude === "number" &&
+        typeof driverLongitude === "number" &&
+        Number.isFinite(driverLatitude) &&
+        Number.isFinite(driverLongitude) &&
+        driverLatitude >= -90 &&
+        driverLatitude <= 90 &&
+        driverLongitude >= -180 &&
+        driverLongitude <= 180
+      ) {
+        points.push([driverLongitude, driverLatitude]);
+      }
+
+      
+points.push([longitude, latitude]);
+
+if (
+  typeof dropoffLongitude === "number" &&
+  typeof dropoffLatitude === "number" &&
+  Number.isFinite(dropoffLongitude) &&
+  Number.isFinite(dropoffLatitude)
+) {
+  points.push([dropoffLongitude, dropoffLatitude]);
+} else {
+  console.error("Invalid drop-off coordinates", {
+    dropoffLongitude,
+    dropoffLatitude,
+  });
+  return;
+}
+
+
+      const routeCoordinates = points
+        .map(([lng, lat]) => `${lng},${lat}`)
+        .join(";");
+
+      const url =
+        "https://router.project-osrm.org/route/v1/driving/" +
+        `${routeCoordinates}?overview=full&geometries=geojson`;
+
       try {
-        // ======================================================
-        // OSRM ROUTE COORDINATES
-        //
-        // OSRM expects:
-        //
-        // longitude,latitude
-        //
-        // Route:
-        //
-        // Driver → Pickup → Destination
-        // ======================================================
+        setRouteError("");
 
-        const routeCoordinates = [
-          `${driverLongitude},${driverLatitude}`,
-          `${longitude},${latitude}`,
-          `${dropoffLongitude},${dropoffLatitude}`,
-        ].join(";");
+        console.log("Route coordinates:", routeCoordinates);
 
-        // ======================================================
-        // OSRM URL
-        // ======================================================
-
-        const url =
-          `https://router.project-osrm.org/route/v1/driving/${routeCoordinates}` +
-          `?overview=full&geometries=geojson`;
-
-        console.log(
-          "Requesting route:",
-          url
-        );
-
-        // ======================================================
-        // REQUEST ROUTE
-        // ======================================================
-
-        const response =
-          await fetch(url);
+        const response = await fetch(url);
+        const responseText = await response.text();
 
         if (!response.ok) {
+          console.error("OSRM response:", responseText);
           throw new Error(
-            `Route request failed: ${response.status}`
+            `Route request failed: ${response.status} - ${responseText}`
           );
         }
 
-        const data =
-          await response.json();
-
-        if (cancelled) {
-          return;
-        }
-
-        // ======================================================
-        // CHECK ROUTE RESPONSE
-        // ======================================================
+        const data = JSON.parse(responseText);
 
         if (
           data.code !== "Ok" ||
-          !data.routes ||
+          !Array.isArray(data.routes) ||
           data.routes.length === 0
         ) {
-          console.log(
-            "No route found:",
-            data
+          throw new Error(
+            data.message || data.code || "No route found."
           );
-
-          return;
         }
-
-        // ======================================================
-        // GET FIRST ROUTE
-        // ======================================================
-
-        const route =
-          data.routes[0];
-
-        // ======================================================
-        // GET GEOJSON COORDINATES
-        //
-        // GeoJSON:
-        // [longitude, latitude]
-        // ======================================================
-
-        const coordinates =
-          route.geometry.coordinates;
-
-        // ======================================================
-        // CONVERT TO LEAFLET FORMAT
-        //
-        // Leaflet:
-        // [latitude, longitude]
-        // ======================================================
-
-        const routePoints =
-          coordinates.map(
-            (
-              point: [number, number]
-            ) => [
-              point[1],
-              point[0],
-            ]
-          );
-
-        // ======================================================
-        // LOAD LEAFLET
-        // ======================================================
-
-        const leafletModule =
-          await import("leaflet");
 
         if (cancelled) {
           return;
         }
 
-        const L =
-          (leafletModule as any).default ||
-          leafletModule;
+        const route = data.routes[0];
 
-        // ======================================================
-        // REMOVE PREVIOUS ROUTE
-        // ======================================================
+        const routePoints: [number, number][] =
+          route.geometry.coordinates.map(
+            (point: [number, number]) => [point[1], point[0]]
+          );
 
         if (routeLayerRef.current) {
           routeLayerRef.current.remove();
-
           routeLayerRef.current = null;
         }
 
-        // ======================================================
-        // DRAW NEW ROUTE
-        // ======================================================
+        routeLayerRef.current = L.polyline(routePoints, {
+          color: "#2563EB",
+          weight: 6,
+          opacity: 0.85,
+          lineJoin: "round",
+          lineCap: "round",
+        }).addTo(map);
 
-        routeLayerRef.current =
-          L.polyline(
-            routePoints,
-            {
-              color: "#2563EB",
-              weight: 6,
-              opacity: 0.8,
-              lineJoin: "round",
-              lineCap: "round",
-            }
-          ).addTo(
-            mapInstanceRef.current
-          );
-
-        // ======================================================
-        // LOG DISTANCE
-        // ======================================================
-
-        console.log(
-          "Route distance:",
-          (
-            route.distance / 1000
-          ).toFixed(2),
-          "km"
-        );
-
-        // ======================================================
-        // LOG DURATION
-        // ======================================================
-
-        console.log(
-          "Route duration:",
-          Math.round(
-            route.duration / 60
-          ),
-          "minutes"
-        );
-
-        // ======================================================
-        // FIT MAP AROUND ROUTE
-        // ======================================================
-
-        const bounds =
-          routeLayerRef.current.getBounds();
+        const bounds = routeLayerRef.current.getBounds();
 
         if (bounds.isValid()) {
-          mapInstanceRef.current.fitBounds(
-            bounds,
-            {
-              padding: [40, 40],
-              maxZoom: 15,
-            }
-          );
+          map.fitBounds(bounds, {
+            padding: [35, 35],
+            maxZoom: 15,
+          });
         }
-      } catch (error) {
-        if (!cancelled) {
-          console.error(
-            "ROUTE ERROR:",
-            error
-          );
-        }
-      }
-    };
 
-    getRoute();
+        console.log("Route distance (metres):", route.distance);
+        console.log("Route duration (seconds):", route.duration);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        const message =
+          error instanceof Error ? error.message : String(error);
+
+        console.error("ROUTE ERROR:", message);
+        setRouteError(message);
+      }
+    }
+
+    void getRoute();
 
     return () => {
       cancelled = true;
     };
   }, [
     mapReady,
-    driverLatitude,
-    driverLongitude,
     latitude,
     longitude,
     dropoffLatitude,
     dropoffLongitude,
+    driverLatitude,
+    driverLongitude,
   ]);
 
-  // ============================================================
-  // MAP CONTAINER
-  // ============================================================
-
   return (
-    <div
-      ref={mapContainerRef}
-      style={{
-        width: "100%",
-        height: "350px",
-        borderRadius: "12px",
-        overflow: "hidden",
-        backgroundColor: "#E5E7EB",
-      }}
-    />
+    <View style={styles.container}>
+      <div
+        ref={containerRef}
+        style={{
+          height: 300,
+          width: "100%",
+          borderRadius: 12,
+          overflow: "hidden",
+        }}
+      />
+
+      {routeError ? (
+        <Text style={styles.error}>
+          Route unavailable: {routeError}
+        </Text>
+      ) : null}
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    width: "100%",
+    marginBottom: 10,
+  },
+  error: {
+    color: "#B91C1C",
+    fontSize: 12,
+    marginTop: 6,
+  },
+});
